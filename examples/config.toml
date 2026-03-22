@@ -1,0 +1,12 @@
+# Example envproxy configuration.
+#
+# Usage:
+#   envproxy-agent --config examples/config.toml
+
+[agent]
+socket = "/tmp/envproxy/agent.sock"
+log_level = "debug"
+
+[backend]
+type = "file"
+path = "examples/secrets.json"

@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/envproxy-proto",
+    "crates/libenvproxy",
+    "crates/envproxy-agent",
+    "crates/envproxy-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/envproxy"
+description = "Transparent LD_PRELOAD-based dynamic environment variable resolution from remote secret sources"
+
+[workspace.dependencies]
+envproxy-proto = { path = "crates/envproxy-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+
+[workspace.lints.rust]
+future-incompatible = "warn"
+nonstandard_style = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+redundant_clone = "deny"
+large_enum_variant = "warn"
+needless_collect = "warn"

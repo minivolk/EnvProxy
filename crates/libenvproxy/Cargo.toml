@@ -1,0 +1,19 @@
+[package]
+name = "libenvproxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "LD_PRELOAD shared library that intercepts getenv() and resolves values from envproxy-agent"
+
+[lib]
+name = "envproxy"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+envproxy-proto = { workspace = true }
+libc = "0.2"
+ctor = "0.4"

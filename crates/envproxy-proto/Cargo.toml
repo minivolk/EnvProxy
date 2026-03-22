@@ -1,0 +1,12 @@
+[package]
+name = "envproxy-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Wire protocol for envproxy: shared between the LD_PRELOAD library and the agent"
+
+[lints]
+workspace = true
+
+[dependencies]

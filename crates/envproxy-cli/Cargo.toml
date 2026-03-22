@@ -1,0 +1,19 @@
+[package]
+name = "envproxy-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI tool for envproxy: run commands with LD_PRELOAD, check agent status, test key resolution"
+
+[[bin]]
+name = "envproxy"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+envproxy-proto = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
