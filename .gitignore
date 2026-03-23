@@ -7,3 +7,5 @@
 *.iml
 __pycache__/
 *.pyc
+*.class
+java/build/

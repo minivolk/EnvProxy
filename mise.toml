@@ -77,7 +77,6 @@ description = "Test Python os.getenv() interception"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-ENVPROXY_PYTHON_PATH="$(pwd)/python" \
 ENVPROXY_CACHE_TTL=0 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
 python3 examples/test_python.py
@@ -160,7 +159,6 @@ fi
 # Python test
 if command -v python3 >/dev/null 2>&1; then
   run_test "python:os.getenv" env \
-    ENVPROXY_PYTHON_PATH="$(pwd)/python" \
     ENVPROXY_CACHE_TTL=0 \
     LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
     python3 examples/test_python.py

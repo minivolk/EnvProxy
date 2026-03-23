@@ -32,69 +32,103 @@ use envproxy_proto::{encode_request, Status, DEFAULT_SOCKET_PATH};
 
 /// Library constructor — runs before `main()` when the `.so` is loaded via `LD_PRELOAD`.
 ///
-/// Seeds `PYTHONPATH` with the directory containing `_envproxy.pth` and
-/// `_envproxy_hook.py`, so Python automatically patches `os.environ` at startup.
-///
-/// The Python support directory is located relative to the `.so` file itself:
-/// - If `libenvproxy.so` is at `/usr/lib/libenvproxy.so`, looks for
-///   `/usr/lib/envproxy/python/` or `/usr/share/envproxy/python/`.
-/// - If `ENVPROXY_PYTHON_PATH` is set, uses that instead.
+/// Sets up runtime hooks for languages that cache the environment at startup:
+/// - **Python**: Seeds `PYTHONPATH` so `sitecustomize.py` patches `os.environ`
+/// - **Java**: Seeds `JAVA_TOOL_OPTIONS` so a javaagent patches `System.getenv()`
 #[ctor::ctor]
 fn _envproxy_init() {
-    // SAFETY: We call the real setenv (via libc) to modify the environment
+    // SAFETY: We call setenv (via std::env::set_var) to modify the environment
     // before main() runs. This is safe because no other threads exist yet.
 
-    // Check if Python support is explicitly disabled.
-    let disabled = std::env::var("ENVPROXY_NO_PYTHON").unwrap_or_default();
-    if disabled == "1" {
+    setup_python_hook();
+    setup_java_hook();
+}
+
+/// Seed `PYTHONPATH` so Python auto-loads our `sitecustomize.py` hook.
+fn setup_python_hook() {
+    if std::env::var("ENVPROXY_NO_PYTHON").unwrap_or_default() == "1" {
         return;
     }
 
-    // Find the Python support directory.
-    let Some(python_dir) = find_python_dir() else {
+    let Some(python_dir) = find_support_dir("python", "_envproxy.pth") else {
         return;
     };
 
-    // Prepend to PYTHONPATH (preserve any existing value).
     let new_pythonpath = match std::env::var("PYTHONPATH") {
-        Ok(existing) if !existing.is_empty() => {
-            format!("{python_dir}:{existing}")
-        }
+        Ok(existing) if !existing.is_empty() => format!("{python_dir}:{existing}"),
         _ => python_dir,
     };
 
-    // SAFETY: setenv is called before main() in the library constructor.
-    // No other threads are running at this point.
     std::env::set_var("PYTHONPATH", &new_pythonpath);
 }
 
-/// Locate the Python support directory relative to this `.so` file.
-fn find_python_dir() -> Option<String> {
-    // Check explicit override first.
-    if let Ok(path) = std::env::var("ENVPROXY_PYTHON_PATH") {
-        if std::path::Path::new(&path).join("_envproxy.pth").exists() {
+/// Seed `JAVA_TOOL_OPTIONS` so Java auto-loads our javaagent that patches `System.getenv()`.
+fn setup_java_hook() {
+    if std::env::var("ENVPROXY_NO_JAVA").unwrap_or_default() == "1" {
+        return;
+    }
+
+    let Some(jar_path) = find_support_file("java", "envproxy-agent.jar") else {
+        return;
+    };
+
+    // Build the javaagent flag + required --add-opens for reflection into java.lang.
+    let agent_opts = format!("--add-opens=java.base/java.lang=ALL-UNNAMED -javaagent:{jar_path}");
+
+    let new_opts = match std::env::var("JAVA_TOOL_OPTIONS") {
+        Ok(existing) if !existing.is_empty() => format!("{existing} {agent_opts}"),
+        _ => agent_opts,
+    };
+
+    std::env::set_var("JAVA_TOOL_OPTIONS", &new_opts);
+}
+
+/// Locate a support directory (e.g., `python/`, `java/`) relative to this `.so` file.
+///
+/// Checks:
+/// 1. Explicit env var override (`ENVPROXY_PYTHON_PATH`, `ENVPROXY_JAVA_PATH`)
+/// 2. Sibling to the `.so`: `<so_dir>/envproxy/<subdir>/`
+/// 3. Share directory: `<so_dir>/../share/envproxy/<subdir>/`
+/// 4. Development layout: `<so_dir>/../<subdir>/`
+///
+/// Returns the directory path if `marker_file` exists inside it.
+fn find_support_dir(subdir: &str, marker_file: &str) -> Option<String> {
+    // Check explicit override (e.g., ENVPROXY_PYTHON_PATH).
+    let env_key = format!("ENVPROXY_{}_PATH", subdir.to_uppercase());
+    if let Ok(path) = std::env::var(&env_key) {
+        if std::path::Path::new(&path).join(marker_file).exists() {
             return Some(path);
         }
     }
 
-    // Find the path of libenvproxy.so itself using dladdr.
     let so_path = get_self_path()?;
     let so_dir = std::path::Path::new(&so_path).parent()?;
 
-    // Check candidate locations relative to the .so.
     let candidates = [
-        so_dir.join("envproxy/python"),          // /usr/lib/envproxy/python/
-        so_dir.join("../share/envproxy/python"), // /usr/share/envproxy/python/
-        so_dir.join("../python"),                // development: target/release/../python
+        so_dir.join(format!("envproxy/{subdir}")), // /usr/lib/envproxy/<subdir>/
+        so_dir.join(format!("../share/envproxy/{subdir}")), // /usr/share/envproxy/<subdir>/
+        so_dir.join(format!("../{subdir}")),       // <prefix>/<subdir>/ (single-dir install)
+        so_dir.join(format!("../../{subdir}")),    // dev: target/release/../../<subdir>/
     ];
 
     for candidate in &candidates {
-        if candidate.join("_envproxy.pth").exists() {
+        if candidate.join(marker_file).exists() {
             return candidate.canonicalize().ok()?.to_str().map(String::from);
         }
     }
 
     None
+}
+
+/// Locate a specific support file, returning its full path.
+fn find_support_file(subdir: &str, filename: &str) -> Option<String> {
+    let dir = find_support_dir(subdir, filename)?;
+    let full_path = std::path::Path::new(&dir).join(filename);
+    if full_path.exists() {
+        full_path.to_str().map(String::from)
+    } else {
+        None
+    }
 }
 
 /// Get the filesystem path of this `.so` using `dladdr`.
