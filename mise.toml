@@ -203,16 +203,7 @@ set -euo pipefail
 cargo build --release -q
 ENVPROXY_CACHE_TTL=5 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-python3 -c "
-import os, time
-while True:
-    db = os.getenv('DATABASE_URL', '<NOT SET>')
-    api = os.getenv('API_KEY', '<NOT SET>')
-    print(f'[{time.strftime(\"%H:%M:%S\")}] DATABASE_URL={db}')
-    print(f'[{time.strftime(\"%H:%M:%S\")}] API_KEY={api}')
-    print('---')
-    time.sleep(3)
-"
+python3 examples/demo_poll.py
 """
 
 [tasks."demo:java"]
