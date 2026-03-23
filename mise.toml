@@ -185,25 +185,25 @@ echo "Results: $PASS passed, $FAIL failed"
 """
 
 [tasks.demo]
-description = "Run the Python demo with live output"
+description = "Run the Python demo (start agent first with: mise run agent)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
 cargo build --release -q
-
-mkdir -p /tmp/envproxy
-target/release/envproxy-agent --config examples/config.toml &
-AGENT_PID=$!
-trap "kill $AGENT_PID 2>/dev/null" EXIT
-for i in $(seq 1 20); do [ -S /tmp/envproxy/agent.sock ] && break; sleep 0.1; done
-
-echo "Agent running. Starting Python demo..."
-echo "Edit examples/secrets.json to see live secret rotation."
-echo "Press Ctrl+C to stop."
-echo ""
-
-ENVPROXY_PYTHON_PATH="$(pwd)/python" \
 ENVPROXY_CACHE_TTL=5 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
 python3 examples/python_demo.py
+"""
+
+[tasks."demo:java"]
+description = "Run the Java demo (start agent first with: mise run agent)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo build --release -q
+mkdir -p /tmp/envproxy
+javac -d /tmp/envproxy examples/JavaDemo.java
+ENVPROXY_CACHE_TTL=5 \
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+java -cp /tmp/envproxy JavaDemo
 """
