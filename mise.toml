@@ -195,6 +195,26 @@ LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
 python3 examples/python_demo.py
 """
 
+[tasks."demo:python"]
+description = "Run a Python env polling loop (start agent first with: mise run agent)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo build --release -q
+ENVPROXY_CACHE_TTL=5 \
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+python3 -c "
+import os, time
+while True:
+    db = os.getenv('DATABASE_URL', '<NOT SET>')
+    api = os.getenv('API_KEY', '<NOT SET>')
+    print(f'[{time.strftime(\"%H:%M:%S\")}] DATABASE_URL={db}')
+    print(f'[{time.strftime(\"%H:%M:%S\")}] API_KEY={api}')
+    print('---')
+    time.sleep(3)
+"
+"""
+
 [tasks."demo:java"]
 description = "Run the Java demo (start agent first with: mise run agent)"
 run = """
