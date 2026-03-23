@@ -1,0 +1,211 @@
+[tools]
+rust = "latest"
+python = "3.12"
+node = "22"
+java = "21"
+
+[env]
+RUST_BACKTRACE = "1"
+ENVPROXY_CACHE_TTL = "5"
+
+_.path = ["./target/release", "./target/debug"]
+
+[tasks.build]
+description = "Build all crates (debug)"
+run = "cargo build"
+
+[tasks."build:release"]
+description = "Build all crates (optimized)"
+run = "cargo build --release"
+
+[tasks.test]
+description = "Run Rust unit tests"
+run = "cargo test"
+
+[tasks.lint]
+description = "Run clippy with strict warnings"
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks.fmt]
+description = "Format all Rust code"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Check Rust formatting (CI)"
+run = "cargo fmt --all -- --check"
+
+[tasks.ci]
+description = "Full CI pipeline: format check, lint, test, integration tests"
+depends = ["fmt:check", "lint", "test", "test:integration"]
+
+[tasks.agent]
+description = "Start envproxy-agent with example config (foreground)"
+run = "cargo run -p envproxy-agent -- --config examples/config.toml"
+
+[tasks."agent:bg"]
+description = "Start envproxy-agent in background, wait for socket"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p /tmp/envproxy
+cargo build --release -q
+target/release/envproxy-agent --config examples/config.toml &
+AGENT_PID=$!
+echo "$AGENT_PID" > /tmp/envproxy/agent.pid
+for i in $(seq 1 20); do
+  [ -S /tmp/envproxy/agent.sock ] && break
+  sleep 0.1
+done
+echo "Agent started (PID $AGENT_PID)"
+"""
+
+[tasks."agent:stop"]
+description = "Stop background envproxy-agent"
+run = """
+#!/usr/bin/env bash
+if [ -f /tmp/envproxy/agent.pid ]; then
+  kill "$(cat /tmp/envproxy/agent.pid)" 2>/dev/null || true
+  rm -f /tmp/envproxy/agent.pid
+  echo "Agent stopped."
+else
+  echo "No agent PID file found."
+fi
+"""
+
+[tasks."test:python"]
+description = "Test Python os.getenv() interception"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+ENVPROXY_PYTHON_PATH="$(pwd)/python" \
+ENVPROXY_CACHE_TTL=0 \
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+python3 examples/test_python.py
+"""
+
+[tasks."test:node"]
+description = "Test Node.js process.env interception"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+node examples/test_node.mjs
+"""
+
+[tasks."test:java"]
+description = "Test Java System.getenv() interception"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+javac -d /tmp/envproxy examples/TestJava.java
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+java -cp /tmp/envproxy TestJava
+"""
+
+[tasks."test:c"]
+description = "Test C getenv() interception"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cc -o /tmp/envproxy/test_c examples/test_c.c
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+/tmp/envproxy/test_c
+"""
+
+[tasks."test:integration"]
+description = "Run all language integration tests (requires agent running)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build release first
+cargo build --release -q
+
+# Start agent
+mkdir -p /tmp/envproxy
+target/release/envproxy-agent --config examples/config.toml &
+AGENT_PID=$!
+trap "kill $AGENT_PID 2>/dev/null; wait $AGENT_PID 2>/dev/null" EXIT
+for i in $(seq 1 20); do [ -S /tmp/envproxy/agent.sock ] && break; sleep 0.1; done
+
+PASS=0
+FAIL=0
+
+run_test() {
+  local name="$1"; shift
+  echo -n "  $name ... "
+  if "$@" > /tmp/envproxy/test_output.txt 2>&1; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL"
+    cat /tmp/envproxy/test_output.txt
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+echo "=== envproxy integration tests ==="
+echo ""
+
+# CLI tests
+run_test "cli:status"  target/release/envproxy status
+run_test "cli:get"     target/release/envproxy get DATABASE_URL
+
+# C test
+if command -v cc >/dev/null 2>&1; then
+  cc -o /tmp/envproxy/test_c examples/test_c.c
+  run_test "c:getenv" env LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" /tmp/envproxy/test_c
+fi
+
+# Python test
+if command -v python3 >/dev/null 2>&1; then
+  run_test "python:os.getenv" env \
+    ENVPROXY_PYTHON_PATH="$(pwd)/python" \
+    ENVPROXY_CACHE_TTL=0 \
+    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+    python3 examples/test_python.py
+fi
+
+# Node.js test
+if command -v node >/dev/null 2>&1; then
+  run_test "node:process.env" env \
+    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+    node examples/test_node.mjs
+fi
+
+# Java test
+if command -v javac >/dev/null 2>&1; then
+  javac -d /tmp/envproxy examples/TestJava.java 2>/dev/null
+  run_test "java:System.getenv" env \
+    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+    java -cp /tmp/envproxy TestJava
+fi
+
+echo ""
+echo "Results: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
+"""
+
+[tasks.demo]
+description = "Run the Python demo with live output"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo build --release -q
+
+mkdir -p /tmp/envproxy
+target/release/envproxy-agent --config examples/config.toml &
+AGENT_PID=$!
+trap "kill $AGENT_PID 2>/dev/null" EXIT
+for i in $(seq 1 20); do [ -S /tmp/envproxy/agent.sock ] && break; sleep 0.1; done
+
+echo "Agent running. Starting Python demo..."
+echo "Edit examples/secrets.json to see live secret rotation."
+echo "Press Ctrl+C to stop."
+echo ""
+
+ENVPROXY_PYTHON_PATH="$(pwd)/python" \
+ENVPROXY_CACHE_TTL=5 \
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+python3 examples/python_demo.py
+"""
