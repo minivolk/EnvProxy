@@ -188,19 +188,25 @@ path = "/etc/envproxy/secrets.json"
 ```
 envproxy/
 ├── Cargo.toml                          # Workspace root
+├── mise.toml                           # Dev tools + tasks
 ├── crates/
 │   ├── envproxy-proto/                 # Wire protocol (zero dependencies)
 │   ├── libenvproxy/                    # LD_PRELOAD .so (cdylib)
 │   ├── envproxy-agent/                 # Local daemon (tokio async)
 │   └── envproxy-cli/                   # CLI tool
-├── python/
+├── python/                             # Python runtime hook
 │   ├── _envproxy_hook.py               # os.environ proxy
-│   ├── sitecustomize.py                # Auto-loader with chaining
-│   └── _envproxy.pth                   # For site-packages installs
+│   └── sitecustomize.py                # Auto-loader with chaining
+├── java/                               # Java runtime hook
+│   ├── src/envproxy/                   # Agent source (EnvProxyAgent + EnvProxyMap)
+│   └── envproxy-agent.jar              # Pre-built agent JAR
 └── examples/
-    ├── config.toml                     # Example agent config
-    ├── secrets.json                    # Example secrets file
-    └── python_demo.py                  # Python demo script
+    ├── config.toml                     # Shared agent config
+    ├── secrets.json                    # Shared secrets file
+    ├── python/                         # Python demos + README
+    ├── java/                           # Java demos + README
+    ├── node/                           # Node.js demos + README
+    └── c/                              # C demos + README
 ```
 
 ## Security Model

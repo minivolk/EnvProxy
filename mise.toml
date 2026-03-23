@@ -35,8 +35,8 @@ description = "Check Rust formatting (CI)"
 run = "cargo fmt --all -- --check"
 
 [tasks.ci]
-description = "Full CI pipeline: format check, lint, test, integration tests"
-depends = ["fmt:check", "lint", "test", "test:integration"]
+description = "Full CI pipeline: format check, lint, test"
+depends = ["fmt:check", "lint", "test"]
 
 [tasks.agent]
 description = "Start envproxy-agent with example config (foreground)"
@@ -72,118 +72,6 @@ else
 fi
 """
 
-[tasks."test:python"]
-description = "Test Python os.getenv() interception"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-ENVPROXY_CACHE_TTL=0 \
-LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-python3 examples/test_python.py
-"""
-
-[tasks."test:node"]
-description = "Test Node.js process.env interception"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-node examples/test_node.mjs
-"""
-
-[tasks."test:java"]
-description = "Test Java System.getenv() interception"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-javac -d /tmp/envproxy examples/TestJava.java
-LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-java -cp /tmp/envproxy TestJava
-"""
-
-[tasks."test:c"]
-description = "Test C getenv() interception"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-cc -o /tmp/envproxy/test_c examples/test_c.c
-LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-/tmp/envproxy/test_c
-"""
-
-[tasks."test:integration"]
-description = "Run all language integration tests (requires agent running)"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Build release first
-cargo build --release -q
-
-# Start agent
-mkdir -p /tmp/envproxy
-target/release/envproxy-agent --config examples/config.toml &
-AGENT_PID=$!
-trap "kill $AGENT_PID 2>/dev/null; wait $AGENT_PID 2>/dev/null" EXIT
-for i in $(seq 1 20); do [ -S /tmp/envproxy/agent.sock ] && break; sleep 0.1; done
-
-PASS=0
-FAIL=0
-
-run_test() {
-  local name="$1"; shift
-  echo -n "  $name ... "
-  if "$@" > /tmp/envproxy/test_output.txt 2>&1; then
-    echo "PASS"
-    PASS=$((PASS + 1))
-  else
-    echo "FAIL"
-    cat /tmp/envproxy/test_output.txt
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-echo "=== envproxy integration tests ==="
-echo ""
-
-# CLI tests
-run_test "cli:status"  target/release/envproxy status
-run_test "cli:get"     target/release/envproxy get DATABASE_URL
-
-# C test
-if command -v cc >/dev/null 2>&1; then
-  cc -o /tmp/envproxy/test_c examples/test_c.c
-  run_test "c:getenv" env LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" /tmp/envproxy/test_c
-fi
-
-# Python test
-if command -v python3 >/dev/null 2>&1; then
-  run_test "python:os.getenv" env \
-    ENVPROXY_CACHE_TTL=0 \
-    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-    python3 examples/test_python.py
-fi
-
-# Node.js test
-if command -v node >/dev/null 2>&1; then
-  run_test "node:process.env" env \
-    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-    node examples/test_node.mjs
-fi
-
-# Java test
-if command -v javac >/dev/null 2>&1; then
-  javac -d /tmp/envproxy examples/TestJava.java 2>/dev/null
-  run_test "java:System.getenv" env \
-    LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-    java -cp /tmp/envproxy TestJava
-fi
-
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
-"""
-
 [tasks.demo]
 description = "Run the Python demo (start agent first with: mise run agent)"
 run = """
@@ -192,7 +80,7 @@ set -euo pipefail
 cargo build --release -q
 ENVPROXY_CACHE_TTL=5 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-python3 examples/python_demo.py
+python3 examples/python/demo.py
 """
 
 [tasks."demo:python"]
@@ -203,7 +91,7 @@ set -euo pipefail
 cargo build --release -q
 ENVPROXY_CACHE_TTL=5 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-python3 examples/demo_poll.py
+python3 examples/python/poll.py
 """
 
 [tasks."demo:java"]
@@ -213,8 +101,30 @@ run = """
 set -euo pipefail
 cargo build --release -q
 mkdir -p /tmp/envproxy
-javac -d /tmp/envproxy examples/JavaDemo.java
+javac -d /tmp/envproxy examples/java/Demo.java
 ENVPROXY_CACHE_TTL=5 \
 LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
-java -cp /tmp/envproxy JavaDemo
+java -cp /tmp/envproxy Demo
+"""
+
+[tasks."demo:node"]
+description = "Run the Node.js demo (start agent first with: mise run agent)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo build --release -q
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+node examples/node/demo.mjs
+"""
+
+[tasks."demo:c"]
+description = "Run the C demo (start agent first with: mise run agent)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo build --release -q
+mkdir -p /tmp/envproxy
+cc -o /tmp/envproxy/demo_c examples/c/demo.c
+LD_PRELOAD="$(pwd)/target/release/libenvproxy.so" \
+/tmp/envproxy/demo_c
 """

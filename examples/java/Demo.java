@@ -10,14 +10,14 @@
  *
  *   # Or manually:
  *   envproxy-agent --config examples/config.toml &
- *   javac -d /tmp/envproxy examples/JavaDemo.java
- *   LD_PRELOAD=target/release/libenvproxy.so java -cp /tmp/envproxy JavaDemo
+ *   javac -d /tmp/envproxy examples/java/Demo.java
+ *   LD_PRELOAD=target/release/libenvproxy.so java -cp /tmp/envproxy Demo
  */
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
-public class JavaDemo {
+public class Demo {
 
     private static final String[] KEYS = {
         "DATABASE_URL", "API_KEY", "REDIS_URL", "JWT_SECRET"
