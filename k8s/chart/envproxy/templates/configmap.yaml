@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "envproxy.agent.fullname" . }}-config
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    [agent]
+    socket = "{{ .Values.agent.socket.hostPath }}/agent.sock"
+    log_level = "{{ .Values.agent.logLevel }}"
+
+    [backend]
+    {{- if eq .Values.agent.backend.type "kubernetes" }}
+    type = "kubernetes"
+    namespace = "{{ .Values.agent.backend.namespace | default .Release.Namespace }}"
+    secret_name = "{{ .Values.agent.backend.secretName }}"
+    {{- else if eq .Values.agent.backend.type "file" }}
+    type = "file"
+    path = "{{ .Values.agent.backend.path }}"
+    {{- else if eq .Values.agent.backend.type "http" }}
+    type = "http"
+    url = "{{ .Values.agent.backend.url }}"
+    {{- if .Values.agent.backend.authToken }}
+    auth_token = "{{ .Values.agent.backend.authToken }}"
+    {{- end }}
+    {{- end }}

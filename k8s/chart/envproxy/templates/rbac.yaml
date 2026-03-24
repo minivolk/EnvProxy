@@ -1,0 +1,47 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "envproxy.serviceAccountName" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "envproxy.fullname" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+rules:
+  # For the kubernetes backend: read secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "watch", "list"]
+  # For the injector: read pods, serviceaccounts (imagePullSecrets for registry auth)
+  - apiGroups: [""]
+    resources: ["pods", "serviceaccounts"]
+    verbs: ["get", "list"]
+  # For self-signed TLS: update the MutatingWebhookConfiguration with caBundle
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "envproxy.fullname" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "envproxy.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "envproxy.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,16 @@
+# Example: Java pod with envproxy injection.
+# The webhook sets JAVA_TOOL_OPTIONS with the envproxy-agent.jar,
+# which patches System.getenv() via a javaagent.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: java-app
+  annotations:
+    envproxy.dev/inject: "true"
+spec:
+  containers:
+    - name: app
+      image: eclipse-temurin:21-jre
+      command: ["java", "-cp", "/app", "App"]
+      # You would typically have your JAR/class files in the image.
+      # This is a simplified example.

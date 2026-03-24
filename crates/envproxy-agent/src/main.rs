@@ -64,6 +64,13 @@ async fn main() -> Result<()> {
             let http_backend = backend::http::HttpBackend::new(http_config.clone());
             Arc::new(http_backend)
         }
+        #[cfg(feature = "kubernetes")]
+        BackendConfig::Kubernetes(k8s_config) => {
+            let k8s_backend = backend::kubernetes::KubernetesBackend::new(k8s_config)
+                .await
+                .context("failed to initialize Kubernetes backend")?;
+            Arc::new(k8s_backend)
+        }
     };
 
     // Start the Unix socket server.

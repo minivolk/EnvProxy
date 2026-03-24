@@ -1,0 +1,19 @@
+# Example: Node.js pod with envproxy injection.
+# Node.js calls getenv() on every process.env access, so LD_PRELOAD
+# interception works transparently — no Python-style hook needed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-app
+  annotations:
+    envproxy.dev/inject: "true"
+spec:
+  containers:
+    - name: app
+      image: node:22-slim
+      command: ["node", "-e"]
+      args:
+        - |
+          setInterval(() => {
+            console.log("DATABASE_URL =", process.env.DATABASE_URL || "<NOT SET>");
+          }, 5000);

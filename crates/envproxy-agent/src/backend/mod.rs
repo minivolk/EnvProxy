@@ -5,6 +5,8 @@
 
 pub mod file;
 pub mod http;
+#[cfg(feature = "kubernetes")]
+pub mod kubernetes;
 
 use std::future::Future;
 use std::pin::Pin;

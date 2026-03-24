@@ -1,0 +1,19 @@
+{{- if .Values.injector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "envproxy.injector.serviceName" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: injector
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: webhook
+      protocol: TCP
+      name: webhook
+  selector:
+    {{- include "envproxy.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: injector
+{{- end }}

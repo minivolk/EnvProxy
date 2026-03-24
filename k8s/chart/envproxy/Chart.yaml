@@ -1,0 +1,17 @@
+apiVersion: v2
+name: envproxy
+description: Transparent dynamic environment variable resolution from remote secret sources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - secrets
+  - environment-variables
+  - ld-preload
+  - vault
+  - kubernetes
+home: https://github.com/minivolk/EnvProxy
+sources:
+  - https://github.com/minivolk/EnvProxy
+maintainers:
+  - name: envproxy contributors

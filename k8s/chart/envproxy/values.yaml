@@ -1,0 +1,89 @@
+# envproxy Helm chart values
+
+# -- envproxy-agent DaemonSet configuration
+agent:
+  image:
+    repository: ghcr.io/minivolk/envproxy
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # -- Agent configuration (rendered into config.toml ConfigMap)
+  backend:
+    # -- Backend type: "kubernetes", "file", "http"
+    type: kubernetes
+    # -- For kubernetes backend: namespace of the Secret (defaults to release namespace)
+    namespace: ""
+    # -- For kubernetes backend: Secret name to read env vars from
+    secretName: envproxy-secrets
+
+  socket:
+    # -- Host path for the Unix socket (shared with all pods on the node)
+    hostPath: /var/run/envproxy
+
+  # -- Log level: trace, debug, info, warn, error
+  logLevel: info
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 50m
+      memory: 32Mi
+
+  nodeSelector: {}
+  tolerations: []
+
+# -- envproxy-injector webhook configuration
+injector:
+  enabled: true
+
+  image:
+    repository: ghcr.io/minivolk/envproxy-injector
+    tag: latest
+    pullPolicy: Always
+
+  # -- Default cache TTL in seconds for Python/Java
+  defaultCacheTTL: "30"
+
+  # -- Webhook failure policy: Ignore or Fail
+  # Use Ignore in production to avoid blocking pod creation if the webhook is down
+  failurePolicy: Ignore
+
+  # -- Namespace selector: only pods in namespaces with this label are eligible
+  namespaceSelector:
+    matchLabels:
+      envproxy.dev/injection: enabled
+
+  replicas: 1
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# -- TLS configuration for the webhook
+tls:
+  # -- Use cert-manager to generate TLS certificates
+  certManager:
+    enabled: false
+    # -- Issuer kind: Issuer or ClusterIssuer
+    issuerKind: Issuer
+    # -- Issuer name (created by the chart if certManager.enabled)
+    issuerName: envproxy-selfsigned
+
+  # -- Alternatively, provide your own TLS secret
+  # secretName: envproxy-injector-tls
+
+# -- Image pull secrets for private registries (e.g., ghcr.io)
+imagePullSecrets:
+  - name: ghcr-pull-secret
+
+# -- ServiceAccount configuration
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

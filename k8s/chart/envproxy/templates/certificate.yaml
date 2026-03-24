@@ -1,0 +1,27 @@
+{{- if and .Values.injector.enabled .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.tls.certManager.issuerName }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "envproxy.injector.fullname" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "envproxy.injector.tlsSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuerName }}
+    kind: {{ .Values.tls.certManager.issuerKind }}
+  dnsNames:
+    - {{ include "envproxy.injector.serviceName" . }}
+    - {{ include "envproxy.injector.serviceName" . }}.{{ .Release.Namespace }}
+    - {{ include "envproxy.injector.serviceName" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "envproxy.injector.serviceName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+{{- end }}

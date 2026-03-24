@@ -38,6 +38,10 @@ run = "cargo fmt --all -- --check"
 description = "Full CI pipeline: format check, lint, test"
 depends = ["fmt:check", "lint", "test"]
 
+[tasks."build:java"]
+description = "Build the Java agent JAR"
+run = "bash support/java/build.sh"
+
 [tasks.agent]
 description = "Start envproxy-agent with example config (foreground)"
 run = "cargo run -p envproxy-agent -- --config examples/config.toml"

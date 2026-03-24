@@ -1,0 +1,31 @@
+{{- if .Values.injector.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "envproxy.injector.fullname" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+  {{- if .Values.tls.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "envproxy.injector.fullname" . }}
+  {{- end }}
+webhooks:
+  - name: inject.envproxy.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.injector.failurePolicy }}
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    clientConfig:
+      service:
+        name: {{ include "envproxy.injector.serviceName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+    {{- with .Values.injector.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

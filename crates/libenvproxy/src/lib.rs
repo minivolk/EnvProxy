@@ -50,7 +50,7 @@ fn setup_python_hook() {
         return;
     }
 
-    let Some(python_dir) = find_support_dir("python", "_envproxy.pth") else {
+    let Some(python_dir) = find_support_dir("python", "sitecustomize.py") else {
         return;
     };
 
@@ -89,7 +89,7 @@ fn setup_java_hook() {
 /// 1. Explicit env var override (`ENVPROXY_PYTHON_PATH`, `ENVPROXY_JAVA_PATH`)
 /// 2. Sibling to the `.so`: `<so_dir>/envproxy/<subdir>/`
 /// 3. Share directory: `<so_dir>/../share/envproxy/<subdir>/`
-/// 4. Development layout: `<so_dir>/../<subdir>/`
+/// 4. Development layout: `<so_dir>/../../support/<subdir>/`
 ///
 /// Returns the directory path if `marker_file` exists inside it.
 fn find_support_dir(subdir: &str, marker_file: &str) -> Option<String> {
@@ -107,8 +107,8 @@ fn find_support_dir(subdir: &str, marker_file: &str) -> Option<String> {
     let candidates = [
         so_dir.join(format!("envproxy/{subdir}")), // /usr/lib/envproxy/<subdir>/
         so_dir.join(format!("../share/envproxy/{subdir}")), // /usr/share/envproxy/<subdir>/
-        so_dir.join(format!("../{subdir}")),       // <prefix>/<subdir>/ (single-dir install)
-        so_dir.join(format!("../../{subdir}")),    // dev: target/release/../../<subdir>/
+        so_dir.join(format!("../{subdir}")),       // <prefix>/<subdir>/ (flat install)
+        so_dir.join(format!("../../support/{subdir}")), // dev: target/release/../../support/<subdir>/
     ];
 
     for candidate in &candidates {

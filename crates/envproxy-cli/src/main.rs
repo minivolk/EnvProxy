@@ -15,6 +15,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -71,6 +72,12 @@ fn main() -> Result<()> {
 }
 
 /// Run a command with `LD_PRELOAD` set to the envproxy shared library.
+///
+/// Uses `exec()` to replace the current process with the target command.
+/// This is the correct pattern for container entrypoint wrappers because:
+/// - PID 1 receives signals directly (SIGTERM for graceful shutdown)
+/// - `LD_PRELOAD` and `PYTHONPATH` are visible in PID 1's environment
+/// - No zombie process issues from a wrapper parent
 fn cmd_run(cmd: &[String], socket: &Path) -> Result<()> {
     if cmd.is_empty() {
         bail!("no command specified");
@@ -79,14 +86,21 @@ fn cmd_run(cmd: &[String], socket: &Path) -> Result<()> {
     // Find the libenvproxy.so — check common locations.
     let lib_path = find_libenvproxy()?;
 
-    let status = Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .env("LD_PRELOAD", &lib_path)
-        .env("ENVPROXY_SOCKET", socket.to_string_lossy().as_ref())
-        .status()
-        .with_context(|| format!("failed to execute: {}", cmd[0]))?;
+    let mut command = Command::new(&cmd[0]);
+    command.args(&cmd[1..]);
+    command.env("LD_PRELOAD", &lib_path);
 
-    std::process::exit(status.code().unwrap_or(1));
+    // Only set ENVPROXY_SOCKET if not already in the environment.
+    // In Kubernetes, the webhook sets it to the correct hostPath value
+    // (e.g., /var/run/envproxy/agent.sock); don't overwrite it with the
+    // CLI's default (/tmp/envproxy/agent.sock).
+    if std::env::var("ENVPROXY_SOCKET").is_err() {
+        command.env("ENVPROXY_SOCKET", socket.to_string_lossy().as_ref());
+    }
+
+    // Replace the current process with the target command.
+    let err = command.exec();
+    bail!("exec failed: {err}");
 }
 
 /// Resolve a single key by connecting to the agent.

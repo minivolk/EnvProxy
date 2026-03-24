@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::backend::http::HttpBackendConfig;
+#[cfg(feature = "kubernetes")]
+use crate::backend::kubernetes::KubernetesBackendConfig;
 use envproxy_proto::DEFAULT_SOCKET_PATH;
 
 /// Top-level agent configuration.
@@ -68,6 +70,10 @@ pub enum BackendConfig {
 
     /// Fetch secrets from a remote HTTP API.
     Http(HttpBackendConfig),
+
+    /// Read secrets from a Kubernetes Secret (requires `kubernetes` feature).
+    #[cfg(feature = "kubernetes")]
+    Kubernetes(KubernetesBackendConfig),
 }
 
 impl Config {

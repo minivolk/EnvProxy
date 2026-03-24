@@ -1,11 +1,39 @@
+# Rust
 /target
-*.swp
-*.swo
-*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Java
+*.class
+*.jar
+support/java/build/
+
+# C
+*.o
+*.a
+
+# Node
+node_modules/
+
+# IDE
 .idea/
 .vscode/
 *.iml
-__pycache__/
-*.pyc
-*.class
-java/build/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / environment
+.env
+.env.local
+.env.*.local
+
+# Temporary
+/tmp/

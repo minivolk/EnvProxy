@@ -14,7 +14,7 @@ Usage:
     ENVPROXY_PYTHON_PATH=$(pwd)/python \\
     ENVPROXY_CACHE_TTL=5 \\
     LD_PRELOAD=target/release/libenvproxy.so \\
-    python3 examples/python_demo.py
+    python3 examples/python/demo.py
 """
 
 import os

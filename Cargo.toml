@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/envproxy"
+repository = "https://github.com/minivolk/EnvProxy"
 description = "Transparent LD_PRELOAD-based dynamic environment variable resolution from remote secret sources"
 
 [workspace.dependencies]
@@ -26,6 +26,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+kube = { version = "0.98", features = ["runtime", "client", "derive"] }
+k8s-openapi = { version = "0.24", features = ["v1_32"] }
+futures = "0.3"
 
 [workspace.lints.rust]
 future-incompatible = "warn"

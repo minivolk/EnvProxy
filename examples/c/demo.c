@@ -20,19 +20,6 @@ static const char *KEYS[] = {
 };
 static const int NUM_KEYS = 4;
 
-static void print_masked(const char *key, const char *value) {
-    if (value == NULL) {
-        printf("  [%s] %s = <not set>\n", "", key);
-        return;
-    }
-    size_t len = strlen(value);
-    if (len <= 12) {
-        printf("  [%s] %s = %s\n", "", key, value);
-        return;
-    }
-    printf("  [%s] %s = %.6s...%s\n", "", key, value, value + len - 6);
-}
-
 int main(void) {
     printf("envproxy C demo\n");
     printf("Edit examples/secrets.json to see live rotation. Ctrl+C to stop.\n\n");

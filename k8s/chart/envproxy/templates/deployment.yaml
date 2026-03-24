@@ -1,0 +1,74 @@
+{{- if .Values.injector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "envproxy.injector.fullname" . }}
+  labels:
+    {{- include "envproxy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: injector
+spec:
+  replicas: {{ .Values.injector.replicas }}
+  selector:
+    matchLabels:
+      {{- include "envproxy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: injector
+  template:
+    metadata:
+      labels:
+        {{- include "envproxy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: injector
+    spec:
+      serviceAccountName: {{ include "envproxy.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: injector
+          image: "{{ .Values.injector.image.repository }}:{{ .Values.injector.image.tag }}"
+          imagePullPolicy: {{ .Values.injector.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --envproxy-image={{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}
+            - --default-cache-ttl={{ .Values.injector.defaultCacheTTL }}
+            - --port=9443
+            - --webhook-name={{ include "envproxy.injector.fullname" . }}
+            - --service-name={{ include "envproxy.injector.serviceName" . }}
+            {{- if not .Values.tls.certManager.enabled }}
+            - --self-signed-tls
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+          {{- if .Values.tls.certManager.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.injector.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      {{- if .Values.tls.certManager.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "envproxy.injector.tlsSecretName" . }}
+      {{- end }}
+{{- end }}

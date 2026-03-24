@@ -9,6 +9,10 @@ description = "Local daemon that resolves environment variables from configured 
 [lints]
 workspace = true
 
+[features]
+default = []
+kubernetes = ["kube", "k8s-openapi", "futures"]
+
 [dependencies]
 envproxy-proto = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +24,9 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 clap = { workspace = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
