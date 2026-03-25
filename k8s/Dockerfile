@@ -5,46 +5,57 @@
 #   - DaemonSet: ENTRYPOINT ["envproxy-agent"]
 #   - Init container: copies /usr/lib/envproxy/* into a shared emptyDir volume
 #
-# NOTE: Runtime is debian-slim (not alpine) because libenvproxy.so and the
-# CLI binary must be glibc-linked — they get copied into app pods (python,
-# node, java) which are all glibc-based.
+# Build modes:
+#   Local:  docker build -f k8s/Dockerfile .
+#           (builds Rust + Java inside Docker, slow but self-contained)
+#   CI:     Pre-built binaries are placed in binaries/{amd64,arm64}/ by the
+#           release workflow. The Rust build stage is skipped via cache hit.
+#
+# NOTE: Runtime is debian (not alpine) because libenvproxy.so and the CLI
+# must be glibc-linked — they get copied into glibc-based app pods.
 
-FROM rust:1.88-trixie AS builder
+# ── Java build stage (architecture-independent) ──────────────────────
+FROM eclipse-temurin:21-jdk AS java-builder
+WORKDIR /src
+COPY support/java/src/ src/
+COPY support/java/META-INF/ META-INF/
+RUN mkdir -p build && \
+    javac -d build src/envproxy/EnvProxyAgent.java src/envproxy/EnvProxyMap.java && \
+    jar cfm envproxy-agent.jar META-INF/MANIFEST.MF -C build .
 
+# ── Rust build stage (for local builds; CI uses pre-built binaries) ──
+FROM rust:1.88-trixie AS rust-builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+RUN cargo build --release --features kubernetes && \
+    strip target/release/envproxy-agent && \
+    strip target/release/envproxy && \
+    strip target/release/libenvproxy.so
 
-# Build with kubernetes feature enabled
-RUN cargo build --release --features kubernetes \
-  && strip target/release/envproxy-agent \
-  && strip target/release/envproxy \
-  && strip target/release/libenvproxy.so
-
-# -------------------------------------------------------------------
+# ── Runtime ──────────────────────────────────────────────────────────
 FROM debian:trixie-slim
 
-ENV DEBIAN_FRONTEND noninteractive
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Agent and CLI binaries
-COPY --from=builder /src/target/release/envproxy-agent /usr/bin/envproxy-agent
-COPY --from=builder /src/target/release/envproxy /usr/bin/envproxy
+# Rust binaries — from CI pre-built artifacts or from rust-builder stage.
+# In CI, the release workflow places binaries in binaries/{amd64,arm64}/
+# and buildx sets TARGETARCH automatically.
+ARG TARGETARCH
+COPY binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
+COPY binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
+COPY binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
 
-# Runtime files for LD_PRELOAD injection
-COPY --from=builder /src/target/release/libenvproxy.so /usr/lib/envproxy/lib/libenvproxy.so
-
-# Python hook (sitecustomize.py + _envproxy_hook.py)
+# Python hook
 COPY support/python/ /usr/lib/envproxy/python/
 
-# Java agent JAR (build with: cd support/java && bash build.sh)
-COPY support/java/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
+# Java agent JAR
+COPY --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
-# Default socket directory
-RUN mkdir -p /var/run/envproxy
+RUN mkdir -p /var/run/envproxy && \
+    chmod +x /usr/bin/envproxy-agent /usr/bin/envproxy
 
 ENTRYPOINT ["envproxy-agent"]
 CMD ["--config", "/etc/envproxy/config.toml"]

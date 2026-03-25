@@ -1,0 +1,268 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  ENVPROXY_IMAGE: ghcr.io/minivolk/envproxy
+  INJECTOR_IMAGE: ghcr.io/minivolk/envproxy-injector
+  HELM_REGISTRY: ghcr.io/minivolk/charts
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ── CI checks ──────────────────────────────────────────────────────
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # ── Cross-compile Rust binaries (native speed via cross) ───────────
+  build-rust:
+    name: Build Rust (${{ matrix.arch }})
+    needs: ci
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        run: |
+          cross build --release --features kubernetes --target ${{ matrix.target }}
+
+      - name: Strip binaries
+        run: |
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            strip target/${{ matrix.target }}/release/envproxy-agent
+            strip target/${{ matrix.target }}/release/envproxy
+            strip target/${{ matrix.target }}/release/libenvproxy.so
+          else
+            # ARM64 binaries need the cross strip
+            docker run --rm \
+              -v "$(pwd)/target/${{ matrix.target }}/release:/out" \
+              ghcr.io/cross-rs/${{ matrix.target }}:main \
+              bash -c "aarch64-linux-gnu-strip /out/envproxy-agent /out/envproxy /out/libenvproxy.so"
+          fi
+
+      - name: Package tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="envproxy-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/envproxy-agent dist/
+          cp target/${{ matrix.target }}/release/envproxy dist/
+          cp target/${{ matrix.target }}/release/libenvproxy.so dist/
+          tar czf "$ARCHIVE" -C dist .
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binaries (for Docker build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: dist/
+
+      - name: Upload tarball (for release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.arch }}
+          path: "*.tar.gz"
+
+  # ── Build Java agent JAR ───────────────────────────────────────────
+  build-java:
+    name: Build Java agent JAR
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build JAR
+        run: bash support/java/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-agent
+          path: support/java/envproxy-agent.jar
+
+  # ── Build envproxy Docker image (multi-arch) ───────────────────────
+  build-envproxy-image:
+    name: Docker (envproxy)
+    needs: [build-rust, build-java]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-amd64
+          path: binaries/amd64
+
+      - name: Download arm64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-arm64
+          path: binaries/arm64
+
+      - name: Download Java agent JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: java-agent
+          path: java-agent
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ENVPROXY_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: k8s/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Build injector Docker image (multi-arch) ───────────────────────
+  build-injector-image:
+    name: Docker (injector)
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.INJECTOR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: k8s/injector
+          file: k8s/injector/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Package and push Helm chart to OCI registry ────────────────────
+  helm-publish:
+    name: Helm chart (OCI)
+    needs: [build-envproxy-image, build-injector-image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Package chart
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm package k8s/chart/envproxy \
+            --version "$VERSION" \
+            --app-version "$VERSION"
+
+      - name: Login to OCI registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+
+      - name: Push to OCI
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm push "envproxy-${VERSION}.tgz" "oci://${{ env.HELM_REGISTRY }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: "*.tgz"
+
+  # ── Create GitHub Release ──────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [build-rust, helm-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: tarball-amd64
+
+      - name: Download arm64 tarball
+        uses: actions/download-artifact@v4
+
+        with:
+          name: tarball-arm64
+
+      - name: Download Helm chart
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-chart
+
+      - name: Create release
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "envproxy-${VERSION}-linux-amd64.tar.gz" \
+            "envproxy-${VERSION}-linux-arm64.tar.gz" \
+            "envproxy-${VERSION}.tgz" \
+            --title "EnvProxy ${VERSION}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

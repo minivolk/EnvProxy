@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-check:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  rust-check-k8s:
+    name: Rust (kubernetes feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (kubernetes)
+        run: cargo clippy -p envproxy-agent --features kubernetes -- -D warnings
+
+  go-check:
+    name: Go (vet, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: k8s/injector/go.mod
+          cache-dependency-path: k8s/injector/go.sum
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: k8s/injector
+
+      - name: Build
+        run: go build -o /dev/null ./cmd/
+        working-directory: k8s/injector
+
+  helm-lint:
+    name: Helm lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint
+        run: helm lint k8s/chart/envproxy
