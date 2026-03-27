@@ -19,6 +19,8 @@ use serde::Deserialize;
 use crate::backend::http::HttpBackendConfig;
 #[cfg(feature = "kubernetes")]
 use crate::backend::kubernetes::KubernetesBackendConfig;
+#[cfg(feature = "vault")]
+use crate::backend::vault::VaultBackendConfig;
 use envproxy_proto::DEFAULT_SOCKET_PATH;
 
 /// Top-level agent configuration.
@@ -74,6 +76,10 @@ pub enum BackendConfig {
     /// Read secrets from a Kubernetes Secret (requires `kubernetes` feature).
     #[cfg(feature = "kubernetes")]
     Kubernetes(KubernetesBackendConfig),
+
+    /// Resolve secrets from HashiCorp Vault (requires `vault` feature).
+    #[cfg(feature = "vault")]
+    Vault(VaultBackendConfig),
 }
 
 impl Config {

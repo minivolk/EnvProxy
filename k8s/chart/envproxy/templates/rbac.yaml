@@ -17,14 +17,6 @@ metadata:
   labels:
     {{- include "envproxy.labels" . | nindent 4 }}
 rules:
-  # For the kubernetes backend: read secrets
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "watch", "list"]
-  # For the injector: read pods, serviceaccounts (imagePullSecrets for registry auth)
-  - apiGroups: [""]
-    resources: ["pods", "serviceaccounts"]
-    verbs: ["get", "list"]
   # For self-signed TLS: update the MutatingWebhookConfiguration with caBundle
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations"]

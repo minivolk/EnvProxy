@@ -54,12 +54,12 @@ public class EnvProxyMap extends AbstractMap<String, String> {
     public String get(Object key) {
         // Fast path: check original map.
         String value = original.get(key);
-        if (value != null) {
+        if (value != null && !value.startsWith("vault:")) {
+            // Real value that isn't a Vault reference — return as-is.
             return value;
         }
-        // original.get() returns null for both "key not present" and (theoretically)
-        // "key mapped to null". Use containsKey to distinguish, but the JVM env
-        // never has null values, so we can skip that check.
+        // value is null (key not in env) or starts with "vault:" (needs resolution).
+        // In both cases, query the agent.
 
         if (!(key instanceof String)) {
             return null;

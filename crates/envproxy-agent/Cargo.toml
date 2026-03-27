@@ -12,6 +12,8 @@ workspace = true
 [features]
 default = []
 kubernetes = ["kube", "k8s-openapi", "futures"]
+vault = ["vaultrs", "reqwest"]
+full = ["kubernetes", "vault"]
 
 [dependencies]
 envproxy-proto = { workspace = true }
@@ -27,6 +29,8 @@ clap = { workspace = true }
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+vaultrs = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

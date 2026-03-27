@@ -12,11 +12,12 @@ import (
 )
 
 // mutatePod performs the actual pod mutation:
-// 1. Adds volumes (emptyDir for binaries, hostPath for agent socket)
-// 2. Adds init container (copies envproxy binaries from the envproxy image)
-// 3. Wraps each container's entrypoint with "envproxy run --"
-// 4. Adds environment variables and volume mounts to each container
-// 5. Marks the pod as injected
+// 1. Adds emptyDir volume (shared between init, sidecar, and app containers)
+// 2. Adds init container (copies envproxy binaries + generates agent config)
+// 3. Adds sidecar container (envproxy-agent with Vault backend)
+// 4. Wraps each app container's entrypoint with "envproxy run --"
+// 5. Adds environment variables and volume mounts to each app container
+// 6. Marks the pod as injected
 func (m *Mutator) mutatePod(ctx context.Context, pod *corev1.Pod) error {
 	cacheTTL := m.cfg.DefaultCacheTTL
 	if v, ok := pod.Annotations[config.AnnotationCacheTTL]; ok {
@@ -26,10 +27,9 @@ func (m *Mutator) mutatePod(ctx context.Context, pod *corev1.Pod) error {
 	noPython := pod.Annotations[config.AnnotationNoPython] == "true"
 	noJava := pod.Annotations[config.AnnotationNoJava] == "true"
 
-	// Which containers to inject (empty = all).
 	targetContainers := parseContainerList(pod.Annotations[config.AnnotationContainers])
 
-	// 1. Add volumes.
+	// 1. Add shared emptyDir volume.
 	pod.Spec.Volumes = append(pod.Spec.Volumes,
 		corev1.Volume{
 			Name: config.VolumeName,
@@ -39,23 +39,26 @@ func (m *Mutator) mutatePod(ctx context.Context, pod *corev1.Pod) error {
 				},
 			},
 		},
-		corev1.Volume{
-			Name: config.SocketVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: config.HostSocketPath,
-					Type: hostPathTypePtr(corev1.HostPathDirectory),
-				},
-			},
-		},
 	)
 
-	// 2. Add init container.
-	pod.Spec.InitContainers = append(pod.Spec.InitContainers, m.buildInitContainer())
+	// 2. Add init container (copies binaries + writes agent config).
+	pod.Spec.InitContainers = append(pod.Spec.InitContainers,
+		m.buildInitContainer(pod),
+	)
 
-	// 3. Mutate each target container.
+	// 3. Add sidecar container (envproxy-agent).
+	pod.Spec.Containers = append(pod.Spec.Containers,
+		m.buildSidecar(pod),
+	)
+
+	// 4. Mutate each target app container.
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]
+
+		// Skip the sidecar we just added.
+		if c.Name == "envproxy-agent" {
+			continue
+		}
 
 		if !shouldInject(c.Name, targetContainers) {
 			continue
@@ -66,7 +69,7 @@ func (m *Mutator) mutatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	// 4. Mark as injected.
+	// 5. Mark as injected.
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
@@ -75,24 +78,72 @@ func (m *Mutator) mutatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// buildInitContainer creates the init container that copies envproxy binaries.
-func (m *Mutator) buildInitContainer() corev1.Container {
+// buildInitContainer creates the init container that copies envproxy binaries
+// and generates the agent config.toml from pod annotations.
+func (m *Mutator) buildInitContainer(pod *corev1.Pod) corev1.Container {
+	// Build the agent config from pod annotations.
+	vaultAddr := pod.Annotations[config.AnnotationVaultAddr]
+	vaultRole := pod.Annotations[config.AnnotationVaultRole]
+	vaultAuthMethod := pod.Annotations[config.AnnotationVaultAuthMethod]
+	if vaultAuthMethod == "" {
+		vaultAuthMethod = "kubernetes"
+	}
+	vaultAuthMount := pod.Annotations[config.AnnotationVaultAuthMount]
+	if vaultAuthMount == "" {
+		vaultAuthMount = "kubernetes"
+	}
+	vaultCacheTTL := pod.Annotations[config.AnnotationVaultCacheTTL]
+	if vaultCacheTTL == "" {
+		vaultCacheTTL = "5m"
+	}
+
+	// Determine backend type from annotations.
+	backendConfig := ""
+	if vaultAddr != "" {
+		backendConfig = fmt.Sprintf(`[backend]
+type = "vault"
+address = "%s"
+auth_method = "%s"
+auth_mount = "%s"
+role = "%s"
+cache_ttl = "%s"
+`, vaultAddr, vaultAuthMethod, vaultAuthMount, vaultRole, vaultCacheTTL)
+	} else {
+		// No Vault — use a passthrough "file" backend with empty config.
+		// The agent will just serve as a relay for LD_PRELOAD interception.
+		backendConfig = `[backend]
+type = "file"
+path = "/dev/null"
+`
+	}
+
+	configContent := fmt.Sprintf(`[agent]
+socket = "%s"
+log_level = "info"
+
+%s`, config.SocketPath, backendConfig)
+
+	// The init script copies binaries and writes the config.
+	initScript := fmt.Sprintf(
+		`cp /usr/bin/envproxy /envproxy/envproxy && `+
+			`cp /usr/bin/envproxy-agent /envproxy/envproxy-agent && `+
+			`mkdir -p /envproxy/lib /envproxy/python /envproxy/java && `+
+			`cp /usr/lib/envproxy/lib/libenvproxy.so /envproxy/lib/libenvproxy.so && `+
+			`cp -r /usr/lib/envproxy/python/* /envproxy/python/ && `+
+			`cp /usr/lib/envproxy/java/envproxy-agent.jar /envproxy/java/envproxy-agent.jar && `+
+			`cat > /envproxy/config.toml << 'ENVPROXY_EOF'
+%s
+ENVPROXY_EOF`,
+		configContent,
+	)
+
 	return corev1.Container{
 		Name:    "envproxy-init",
 		Image:   m.cfg.EnvproxyImage,
 		Command: []string{"sh", "-c"},
-		Args: []string{
-			"cp /usr/bin/envproxy /envproxy/envproxy && " +
-				"mkdir -p /envproxy/lib /envproxy/python /envproxy/java && " +
-				"cp /usr/lib/envproxy/lib/libenvproxy.so /envproxy/lib/libenvproxy.so && " +
-				"cp -r /usr/lib/envproxy/python/* /envproxy/python/ && " +
-				"cp /usr/lib/envproxy/java/envproxy-agent.jar /envproxy/java/envproxy-agent.jar",
-		},
+		Args:    []string{initScript},
 		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      config.VolumeName,
-				MountPath: config.MountPath,
-			},
+			{Name: config.VolumeName, MountPath: config.MountPath},
 		},
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
@@ -107,6 +158,28 @@ func (m *Mutator) buildInitContainer() corev1.Container {
 	}
 }
 
+// buildSidecar creates the envproxy-agent sidecar container.
+func (m *Mutator) buildSidecar(pod *corev1.Pod) corev1.Container {
+	return corev1.Container{
+		Name:    "envproxy-agent",
+		Image:   m.cfg.EnvproxyImage,
+		Command: []string{"/envproxy/envproxy-agent", "--config", "/envproxy/config.toml"},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: config.VolumeName, MountPath: config.MountPath},
+		},
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("50m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("32Mi"),
+			},
+		},
+	}
+}
+
 // mutateContainer wraps a single container's entrypoint with envproxy.
 func (m *Mutator) mutateContainer(
 	ctx context.Context,
@@ -115,22 +188,16 @@ func (m *Mutator) mutateContainer(
 	cacheTTL string,
 	noPython, noJava bool,
 ) error {
-	// Discover the original command.
 	originalCmd := c.Command
 	originalArgs := c.Args
 
-	// If command is not set, we need to discover it from the image.
-	// For now, if command is empty, we require it to be set explicitly.
-	// Registry lookup will be added in a future version.
 	if len(originalCmd) == 0 {
-		m.log.Info("container has no explicit command, skipping entrypoint wrapping (set command: in pod spec)",
+		m.log.Info("container has no explicit command, skipping entrypoint wrapping",
 			"container", c.Name,
 		)
-		// Still add env vars and volume mounts for LD_PRELOAD to work
-		// if the image's entrypoint happens to call getenv.
 	}
 
-	// Build the wrapped command: /envproxy/envproxy run -- <original>
+	// Wrap command: /envproxy/envproxy run -- <original>
 	if len(originalCmd) > 0 {
 		wrappedArgs := []string{"run", "--"}
 		wrappedArgs = append(wrappedArgs, originalCmd...)
@@ -140,21 +207,16 @@ func (m *Mutator) mutateContainer(
 		c.Args = wrappedArgs
 	}
 
-	// Add volume mounts.
+	// Volume mount (shared emptyDir with init + sidecar).
 	c.VolumeMounts = append(c.VolumeMounts,
 		corev1.VolumeMount{
 			Name:      config.VolumeName,
 			MountPath: config.MountPath,
 			ReadOnly:  true,
 		},
-		corev1.VolumeMount{
-			Name:      config.SocketVolumeName,
-			MountPath: config.SocketMountPath,
-			ReadOnly:  true,
-		},
 	)
 
-	// Add environment variables.
+	// Environment variables.
 	envVars := []corev1.EnvVar{
 		{Name: "ENVPROXY_SOCKET", Value: config.SocketPath},
 		{Name: "ENVPROXY_LIB", Value: config.MountPath + "/lib/libenvproxy.so"},
@@ -186,10 +248,9 @@ func (m *Mutator) mutateContainer(
 	return nil
 }
 
-// parseContainerList splits a comma-separated container list annotation.
 func parseContainerList(s string) map[string]bool {
 	if s == "" {
-		return nil // nil means "all containers"
+		return nil
 	}
 	result := make(map[string]bool)
 	for _, name := range strings.Split(s, ",") {
@@ -201,14 +262,9 @@ func parseContainerList(s string) map[string]bool {
 	return result
 }
 
-// shouldInject checks whether a container should be injected.
 func shouldInject(name string, targets map[string]bool) bool {
 	if targets == nil {
-		return true // inject all
+		return true
 	}
 	return targets[name]
-}
-
-func hostPathTypePtr(t corev1.HostPathType) *corev1.HostPathType {
-	return &t
 }

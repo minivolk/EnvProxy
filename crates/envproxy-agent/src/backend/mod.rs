@@ -7,6 +7,8 @@ pub mod file;
 pub mod http;
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;
+#[cfg(feature = "vault")]
+pub mod vault;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -24,7 +26,10 @@ pub enum BackendError {
 
     /// An HTTP error occurred while communicating with the backend.
     #[error("HTTP error: {0}")]
-    #[expect(dead_code, reason = "will be used when the HTTP backend is fully implemented")]
+    #[expect(
+        dead_code,
+        reason = "used by vault and http backends when their features are enabled"
+    )]
     Http(String),
 
     /// The backend returned data that could not be parsed.
@@ -49,4 +54,19 @@ pub trait Backend: Send + Sync {
         &self,
         key: &str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, BackendError>> + Send + 'static>>;
+
+    /// Resolve a key using the current env var value (v2 protocol).
+    ///
+    /// When the env var value starts with `vault:`, this method is called
+    /// instead of `resolve()`. The value contains the Vault path reference
+    /// (e.g., `vault:secret/data/myapp/config#DATABASE_URL`).
+    ///
+    /// Default implementation falls back to `resolve()` (ignores the value).
+    fn resolve_with_value(
+        &self,
+        key: &str,
+        _value: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, BackendError>> + Send + 'static>> {
+        self.resolve(key)
+    }
 }

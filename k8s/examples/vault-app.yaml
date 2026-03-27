@@ -1,0 +1,45 @@
+# Example: Python pod with Vault secret resolution via envproxy.
+#
+# Prerequisites:
+#   - envproxy Helm chart installed
+#   - Namespace labeled: kubectl label ns default envproxy.dev/injection=enabled
+#   - Vault configured with Kubernetes auth and a KV v2 secret at secret/myapp/config
+#
+# The webhook automatically:
+#   1. Adds init container (copies binaries + writes agent config)
+#   2. Adds sidecar (envproxy-agent with Vault backend)
+#   3. Wraps entrypoint with "envproxy run --"
+#   4. At runtime, getenv("DATABASE_URL") resolves from Vault dynamically
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-app
+  annotations:
+    envproxy.dev/inject: "true"
+    envproxy.dev/vault-addr: "https://vault.internal:8200"
+    envproxy.dev/vault-role: "myapp"
+    envproxy.dev/vault-auth-method: "kubernetes"
+    envproxy.dev/vault-cache-ttl: "30s"
+spec:
+  serviceAccountName: myapp
+  containers:
+    - name: app
+      image: python:3.12-slim
+      command: ["python3", "-c"]
+      args:
+        - |
+          import os, time
+          print("envproxy vault-app started", flush=True)
+          while True:
+              db = os.getenv("DATABASE_URL", "<NOT SET>")
+              api = os.getenv("API_KEY", "<NOT SET>")
+              print(f"DATABASE_URL = {db}", flush=True)
+              print(f"API_KEY = {api}", flush=True)
+              time.sleep(5)
+      env:
+        - name: DATABASE_URL
+          value: "vault:secret/data/myapp/config#DATABASE_URL"
+        - name: API_KEY
+          value: "vault:secret/data/myapp/config#API_KEY"
+        - name: PLAIN_VAR
+          value: "this-is-not-a-secret"

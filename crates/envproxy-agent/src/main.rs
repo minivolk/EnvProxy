@@ -71,6 +71,13 @@ async fn main() -> Result<()> {
                 .context("failed to initialize Kubernetes backend")?;
             Arc::new(k8s_backend)
         }
+        #[cfg(feature = "vault")]
+        BackendConfig::Vault(vault_config) => {
+            let vault_backend = backend::vault::VaultBackend::new(vault_config)
+                .await
+                .context("failed to initialize Vault backend")?;
+            Arc::new(vault_backend)
+        }
     };
 
     // Start the Unix socket server.

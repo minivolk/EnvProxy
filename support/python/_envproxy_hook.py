@@ -132,9 +132,14 @@ class _EnvProxyEnviron(MutableMapping):
     def __getitem__(self, key):
         # Fast path: try the real environ dict.
         try:
-            return self._original[key]
+            real_value = self._original[key]
+            # If the value starts with "vault:", it's a Vault reference
+            # that needs to be resolved by the agent.
+            if not real_value.startswith("vault:"):
+                return real_value
+            # Fall through to agent resolution below.
         except KeyError:
-            pass
+            real_value = None
 
         # Check our local cache of agent-resolved values.
         entry = self._cache.get(key)
