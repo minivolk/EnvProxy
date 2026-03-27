@@ -45,7 +45,7 @@ jobs:
 
       - name: Build
         run: |
-          cross build --release --features kubernetes --target ${{ matrix.target }}
+          cross build --release --features full --target ${{ matrix.target }}
 
       - name: Strip binaries
         run: |
