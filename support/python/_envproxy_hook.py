@@ -24,7 +24,8 @@ import struct
 import time
 from collections.abc import MutableMapping
 
-_PROTOCOL_VERSION = 1
+_PROTOCOL_V1 = 1
+_PROTOCOL_V2 = 2
 _STATUS_FOUND = 0x00
 
 _DEFAULT_SOCKET_PATH = "/tmp/envproxy/agent.sock"
@@ -33,8 +34,12 @@ _READ_TIMEOUT = 0.5
 _DEFAULT_CACHE_TTL = 30.0  # seconds
 
 
-def _query_agent(key, sock_path):
+def _query_agent(key, sock_path, current_value=None):
     """Query the envproxy-agent for a key via Unix socket.
+
+    If current_value is provided and starts with "vault:", a v2 protocol
+    request is sent (key + value) so the agent can resolve from Vault.
+    Otherwise, a v1 request (key only) is sent.
 
     Returns the value as a string, or None if not found / agent unavailable.
     """
@@ -44,8 +49,21 @@ def _query_agent(key, sock_path):
     if key_len > 0xFFFF:
         return None
 
-    # Build request: [version:1][key_len:2 BE][key:N]
-    request = struct.pack(">BH", _PROTOCOL_VERSION, key_len) + key_bytes
+    if current_value is not None:
+        # v2 protocol: key + value (for vault: resolution)
+        val_bytes = current_value.encode("utf-8", errors="surrogateescape")
+        val_len = len(val_bytes)
+        if val_len > 0xFFFF:
+            return None
+        request = (
+            struct.pack(">BH", _PROTOCOL_V2, key_len)
+            + key_bytes
+            + struct.pack(">H", val_len)
+            + val_bytes
+        )
+    else:
+        # v1 protocol: key only
+        request = struct.pack(">BH", _PROTOCOL_V1, key_len) + key_bytes
 
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -149,7 +167,8 @@ class _EnvProxyEnviron(MutableMapping):
             return entry.value
 
         # Query the agent (cache miss or expired).
-        value = _query_agent(key, self._sock_path)
+        # Pass real_value for vault: references so the agent gets the v2 protocol.
+        value = _query_agent(key, self._sock_path, current_value=real_value)
         self._cache[key] = _CacheEntry(value, time.monotonic())
         if value is not None:
             return value

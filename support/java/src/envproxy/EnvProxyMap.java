@@ -26,7 +26,8 @@ import java.util.*;
  */
 public class EnvProxyMap extends AbstractMap<String, String> {
 
-    private static final byte PROTOCOL_VERSION = 1;
+    private static final byte PROTOCOL_V1 = 1;
+    private static final byte PROTOCOL_V2 = 2;
     private static final byte STATUS_FOUND = 0x00;
 
     private final Map<String, String> original;
@@ -74,8 +75,8 @@ public class EnvProxyMap extends AbstractMap<String, String> {
             }
         }
 
-        // Query agent.
-        String resolved = queryAgent(keyStr);
+        // Query agent. Pass the vault: value for v2 protocol resolution.
+        String resolved = queryAgent(keyStr, value);
         synchronized (cache) {
             cache.put(keyStr, new CacheEntry(resolved, System.currentTimeMillis()));
         }
@@ -138,28 +139,50 @@ public class EnvProxyMap extends AbstractMap<String, String> {
      *
      * <p>Wire protocol:
      * <pre>
-     * Request:  [1: version] [2: key_len BE] [N: key]
-     * Response: [1: status]  [2: val_len BE] [N: value]
+     * v1 Request:  [1: version=1] [2: key_len BE] [N: key]
+     * v2 Request:  [1: version=2] [2: key_len BE] [N: key] [2: val_len BE] [N: value]
+     * Response:    [1: status]    [2: val_len BE] [N: value]
      * </pre>
+     *
+     * @param key the env var key name
+     * @param currentValue the current env var value (if starts with "vault:", sends v2)
      */
-    private String queryAgent(String key) {
+    private String queryAgent(String key, String currentValue) {
         try {
             byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             if (keyBytes.length > 0xFFFF) {
                 return null;
             }
 
+            boolean isVault = currentValue != null && currentValue.startsWith("vault:");
+            byte[] valBytes = isVault
+                    ? currentValue.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                    : new byte[0];
+
             UnixDomainSocketAddress addr = UnixDomainSocketAddress.of(socketPath);
             try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
                 channel.connect(addr);
 
                 // Build request.
-                ByteBuffer request = ByteBuffer.allocate(1 + 2 + keyBytes.length);
-                request.put(PROTOCOL_VERSION);
-                request.putShort((short) keyBytes.length);
-                request.put(keyBytes);
-                request.flip();
-                channel.write(request);
+                if (isVault) {
+                    // v2: key + value
+                    ByteBuffer request = ByteBuffer.allocate(1 + 2 + keyBytes.length + 2 + valBytes.length);
+                    request.put(PROTOCOL_V2);
+                    request.putShort((short) keyBytes.length);
+                    request.put(keyBytes);
+                    request.putShort((short) valBytes.length);
+                    request.put(valBytes);
+                    request.flip();
+                    channel.write(request);
+                } else {
+                    // v1: key only
+                    ByteBuffer request = ByteBuffer.allocate(1 + 2 + keyBytes.length);
+                    request.put(PROTOCOL_V1);
+                    request.putShort((short) keyBytes.length);
+                    request.put(keyBytes);
+                    request.flip();
+                    channel.write(request);
+                }
 
                 // Read response header.
                 ByteBuffer header = ByteBuffer.allocate(3);
