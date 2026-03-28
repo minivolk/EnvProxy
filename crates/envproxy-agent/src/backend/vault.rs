@@ -1,4 +1,4 @@
-//! Vault backend for resolving environment variables from HashiCorp Vault.
+//! Vault backend for resolving environment variables from `HashiCorp` Vault.
 //!
 //! Supports the `vault:` prefix convention (bank-vaults style):
 //! ```text
@@ -20,7 +20,7 @@ use tokio::sync::RwLock;
 use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
 use vaultrs::kv2;
 
-use envproxy_proto::{parse_vault_ref, VaultRef};
+use envproxy_proto::parse_vault_ref;
 
 use super::{Backend, BackendError};
 
@@ -50,13 +50,13 @@ pub struct VaultBackendConfig {
     #[serde(default)]
     pub token_file: Option<String>,
 
-    /// Path to CA certificate for Vault TLS.
+    /// Path to CA certificate for Vault TLS (not yet implemented).
     #[serde(default)]
-    pub ca_cert: Option<String>,
+    pub _ca_cert: Option<String>,
 
-    /// Skip TLS verification (development only).
+    /// Skip TLS verification — development only (not yet implemented).
     #[serde(default)]
-    pub skip_verify: bool,
+    pub _skip_verify: bool,
 
     /// Cache TTL for resolved secrets (e.g., `"5m"`, `"30s"`).
     #[serde(default = "default_cache_ttl")]
@@ -109,10 +109,7 @@ impl VaultBackend {
                 if let Some(ref token) = config.token {
                     token.clone()
                 } else if let Some(ref token_file) = config.token_file {
-                    std::fs::read_to_string(token_file)
-                        .map_err(|e| BackendError::Io(e))?
-                        .trim()
-                        .to_owned()
+                    std::fs::read_to_string(token_file).map_err(BackendError::Io)?.trim().to_owned()
                 } else if let Ok(token) = std::env::var("VAULT_TOKEN") {
                     token
                 } else {
@@ -260,12 +257,12 @@ fn parse_duration(s: &str) -> Option<Duration> {
         return None;
     }
 
-    let (num_str, suffix) = if s.ends_with('s') {
-        (&s[..s.len() - 1], "s")
-    } else if s.ends_with('m') {
-        (&s[..s.len() - 1], "m")
-    } else if s.ends_with('h') {
-        (&s[..s.len() - 1], "h")
+    let (num_str, suffix) = if let Some(stripped) = s.strip_suffix('s') {
+        (stripped, "s")
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        (stripped, "m")
+    } else if let Some(stripped) = s.strip_suffix('h') {
+        (stripped, "h")
     } else {
         // Assume seconds if no suffix.
         (s, "s")

@@ -229,9 +229,10 @@ def _install():
     except (ValueError, TypeError):
         cache_ttl = _DEFAULT_CACHE_TTL
 
-    # Check if the agent socket exists (don't patch if agent isn't running).
-    if not os.path.exists(sock_path):
-        return
+    # Always install the proxy. In the sidecar model, the agent socket may
+    # not exist yet when Python starts (race condition). The proxy handles
+    # agent unavailability gracefully — _query_agent() returns None on
+    # connection failure, and the caller falls back to the real env value.
 
     original = os.environ
     proxy = _EnvProxyEnviron(original, sock_path, cache_ttl)

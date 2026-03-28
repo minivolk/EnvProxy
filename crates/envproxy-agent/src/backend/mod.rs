@@ -26,9 +26,9 @@ pub enum BackendError {
 
     /// An HTTP error occurred while communicating with the backend.
     #[error("HTTP error: {0}")]
-    #[expect(
-        dead_code,
-        reason = "used by vault and http backends when their features are enabled"
+    #[cfg_attr(
+        not(feature = "vault"),
+        expect(dead_code, reason = "used by vault and http backends when enabled")
     )]
     Http(String),
 

@@ -77,7 +77,7 @@ pub enum BackendConfig {
     #[cfg(feature = "kubernetes")]
     Kubernetes(KubernetesBackendConfig),
 
-    /// Resolve secrets from HashiCorp Vault (requires `vault` feature).
+    /// Resolve secrets from `HashiCorp` Vault (requires `vault` feature).
     #[cfg(feature = "vault")]
     Vault(VaultBackendConfig),
 }
