@@ -3,7 +3,7 @@
 #
 # Used as:
 #   - Sidecar: envproxy-agent runs alongside app containers in each pod
-#   - Init container: copies /usr/lib/envproxy/* into a shared emptyDir volume
+#   - Init container: runs "envproxy init --target /envproxy" to copy runtime files
 #
 # Build modes:
 #   Local:  docker build -f k8s/Dockerfile .
@@ -11,8 +11,8 @@
 #   CI:     Pre-built binaries are placed in binaries/{amd64,arm64}/ by the
 #           release workflow. The Rust build stage is skipped via cache hit.
 #
-# NOTE: Runtime is debian (not alpine) because libenvproxy.so and the CLI
-# must be glibc-linked — they get copied into glibc-based app pods.
+# Runtime is distroless/cc-debian12 (glibc included for libenvproxy.so).
+# No shell — the init container uses "envproxy init" subcommand instead of sh -c.
 
 # ── Java build stage (architecture-independent) ──────────────────────
 FROM eclipse-temurin:21-jdk AS java-builder
@@ -20,8 +20,8 @@ WORKDIR /src
 COPY support/java/src/ src/
 COPY support/java/META-INF/ META-INF/
 RUN mkdir -p build && \
-    javac -d build src/envproxy/EnvProxyAgent.java src/envproxy/EnvProxyMap.java && \
-    jar cfm envproxy-agent.jar META-INF/MANIFEST.MF -C build .
+  javac -d build src/envproxy/EnvProxyAgent.java src/envproxy/EnvProxyMap.java && \
+  jar cfm envproxy-agent.jar META-INF/MANIFEST.MF -C build .
 
 # ── Rust build stage (for local builds; CI uses pre-built binaries) ──
 FROM rust:1.88-trixie AS rust-builder
@@ -29,33 +29,27 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 RUN cargo build --release --features full && \
-    strip target/release/envproxy-agent && \
-    strip target/release/envproxy && \
-    strip target/release/libenvproxy.so
+  strip target/release/envproxy-agent && \
+  strip target/release/envproxy && \
+  strip target/release/libenvproxy.so
 
-# ── Runtime ──────────────────────────────────────────────────────────
-FROM debian:trixie-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+# ── Runtime (distroless, non-root — no shell, minimal attack surface) ─
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 # Rust binaries — from CI pre-built artifacts or from rust-builder stage.
-# In CI, the release workflow places binaries in binaries/{amd64,arm64}/
-# and buildx sets TARGETARCH automatically.
+# --chmod=755 required for distroless non-root (no chmod available in image).
 ARG TARGETARCH
-COPY binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
-COPY binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
-COPY binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
+COPY --chmod=755 binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
+COPY --chmod=755 binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
+COPY --chmod=755 binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
 
 # Python hook
-COPY support/python/ /usr/lib/envproxy/python/
+COPY --chmod=755 support/python/ /usr/lib/envproxy/python/
 
 # Java agent JAR
-COPY --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
+COPY --chmod=755 --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
-RUN mkdir -p /var/run/envproxy && \
-    chmod +x /usr/bin/envproxy-agent /usr/bin/envproxy
+USER 65534:65534
 
 ENTRYPOINT ["envproxy-agent"]
 CMD ["--config", "/etc/envproxy/config.toml"]

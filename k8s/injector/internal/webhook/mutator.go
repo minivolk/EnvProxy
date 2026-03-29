@@ -123,28 +123,18 @@ log_level = "info"
 
 %s`, config.SocketPath, backendConfig)
 
-	// The init script copies binaries and writes the config.
-	initScript := fmt.Sprintf(
-		`cp /usr/bin/envproxy /envproxy/envproxy && `+
-			`cp /usr/bin/envproxy-agent /envproxy/envproxy-agent && `+
-			`mkdir -p /envproxy/lib /envproxy/python /envproxy/java && `+
-			`cp /usr/lib/envproxy/lib/libenvproxy.so /envproxy/lib/libenvproxy.so && `+
-			`cp -r /usr/lib/envproxy/python/* /envproxy/python/ && `+
-			`cp /usr/lib/envproxy/java/envproxy-agent.jar /envproxy/java/envproxy-agent.jar && `+
-			`cat > /envproxy/config.toml << 'ENVPROXY_EOF'
-%s
-ENVPROXY_EOF`,
-		configContent,
-	)
-
 	return corev1.Container{
-		Name:    "envproxy-init",
-		Image:   m.cfg.EnvproxyImage,
-		Command: []string{"sh", "-c"},
-		Args:    []string{initScript},
+		Name:  "envproxy-init",
+		Image: m.cfg.EnvproxyImage,
+		Command: []string{
+			"/usr/bin/envproxy", "init",
+			"--target", config.MountPath,
+			"--write-config", configContent,
+		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: config.VolumeName, MountPath: config.MountPath},
 		},
+		SecurityContext: secureContext(),
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("50m"),
@@ -173,6 +163,7 @@ func (m *Mutator) buildSidecar(pod *corev1.Pod) corev1.Container {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: config.VolumeName, MountPath: config.MountPath},
 		},
+		SecurityContext: secureContext(),
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse(cpuLimit),
@@ -283,4 +274,27 @@ func shouldInject(name string, targets map[string]bool) bool {
 		return true
 	}
 	return targets[name]
+}
+
+// secureContext returns a hardened SecurityContext for injected containers:
+// non-root, read-only root filesystem, no privilege escalation, all capabilities dropped.
+func secureContext() *corev1.SecurityContext {
+	uid := int64(65534)
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             boolPtr(true),
+		RunAsUser:                &uid,
+		ReadOnlyRootFilesystem:   boolPtr(true),
+		AllowPrivilegeEscalation: boolPtr(false),
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func int64Ptr(i int64) *int64 {
+	return &i
 }

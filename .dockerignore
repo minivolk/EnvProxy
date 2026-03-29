@@ -1,0 +1,16 @@
+.git
+target
+node_modules
+__pycache__
+*.pyc
+*.class
+*.o
+*.a
+.idea
+.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+.env
+.env.local

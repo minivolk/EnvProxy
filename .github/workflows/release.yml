@@ -19,7 +19,7 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  # ── Cross-compile Rust binaries (native speed via cross) ───────────
+  # ── Build Rust binaries (native per-arch) ──────────────────────────
   build-rust:
     name: Build Rust (${{ matrix.arch }})
     needs: ci
@@ -27,11 +27,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            arch: amd64
+          - arch: amd64
             runner: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            arch: arm64
+          - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +38,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.arch }}
 
       - name: Build
         run: cargo build --release --features full
@@ -60,7 +58,6 @@ jobs:
           cp target/release/envproxy dist/
           cp target/release/libenvproxy.so dist/
           tar czf "$ARCHIVE" -C dist .
-          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
       - name: Upload binaries (for Docker build)
         uses: actions/upload-artifact@v4
@@ -73,6 +70,36 @@ jobs:
         with:
           name: tarball-${{ matrix.arch }}
           path: "*.tar.gz"
+
+  # ── Build Go injector binary (native per-arch) ─────────────────────
+  build-injector:
+    name: Build Injector (${{ matrix.arch }})
+    needs: ci
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: k8s/injector/go.mod
+          cache-dependency-path: k8s/injector/go.sum
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o injector ./cmd/
+        working-directory: k8s/injector
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: injector-${{ matrix.arch }}
+          path: k8s/injector/injector
 
   # ── Build Java agent JAR ───────────────────────────────────────────
   build-java:
@@ -95,25 +122,28 @@ jobs:
           name: java-agent
           path: support/java/envproxy-agent.jar
 
-  # ── Build envproxy Docker image (multi-arch) ───────────────────────
+  # ── Build envproxy Docker image (per-arch native, then merge) ──────
   build-envproxy-image:
-    name: Docker (envproxy)
+    name: Docker envproxy (${{ matrix.arch }})
     needs: [build-rust, build-java]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download amd64 binaries
+      - name: Download binaries
         uses: actions/download-artifact@v4
         with:
-          name: binaries-amd64
-          path: binaries/amd64
-
-      - name: Download arm64 binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: binaries-arm64
-          path: binaries/arm64
+          name: binaries-${{ matrix.arch }}
+          path: binaries/${{ matrix.arch }}
 
       - name: Download Java agent JAR
         uses: actions/download-artifact@v4
@@ -121,7 +151,6 @@ jobs:
           name: java-agent
           path: java-agent
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -135,31 +164,75 @@ jobs:
         with:
           images: ${{ env.ENVPROXY_IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest
+            type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
+            type=sha,prefix=sha-,suffix=-${{ matrix.arch }}
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: k8s/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=envproxy-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=envproxy-${{ matrix.arch }}
 
-  # ── Build injector Docker image (multi-arch) ───────────────────────
-  build-injector-image:
-    name: Docker (injector)
-    needs: ci
+  # ── Merge envproxy multi-arch manifest ─────────────────────────────
+  merge-envproxy-manifest:
+    name: Merge envproxy manifest
+    needs: build-envproxy-image
     runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="sha-${GITHUB_SHA::7}"
+
+          # Create version tag manifest
+          docker buildx imagetools create -t "$ENVPROXY_IMAGE:${VERSION}" \
+            "$ENVPROXY_IMAGE:${VERSION}-amd64" \
+            "$ENVPROXY_IMAGE:${VERSION}-arm64"
+
+          # Create sha tag manifest
+          docker buildx imagetools create -t "$ENVPROXY_IMAGE:${SHA}" \
+            "$ENVPROXY_IMAGE:${SHA}-amd64" \
+            "$ENVPROXY_IMAGE:${SHA}-arm64"
+
+          # Create latest tag manifest
+          docker buildx imagetools create -t "$ENVPROXY_IMAGE:latest" \
+            "$ENVPROXY_IMAGE:${VERSION}-amd64" \
+            "$ENVPROXY_IMAGE:${VERSION}-arm64"
+
+  # ── Build injector Docker image (per-arch native, then merge) ──────
+  build-injector-image:
+    name: Docker injector (${{ matrix.arch }})
+    needs: build-injector
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Download injector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: injector-${{ matrix.arch }}
+          path: k8s/injector/binaries/${{ matrix.arch }}
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -173,26 +246,53 @@ jobs:
         with:
           images: ${{ env.INJECTOR_IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest
+            type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
+            type=sha,prefix=sha-,suffix=-${{ matrix.arch }}
 
       - uses: docker/build-push-action@v6
         with:
           context: k8s/injector
-          file: k8s/injector/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          file: k8s/injector/Dockerfile.release
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=injector-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=injector-${{ matrix.arch }}
+
+  # ── Merge injector multi-arch manifest ─────────────────────────────
+  merge-injector-manifest:
+    name: Merge injector manifest
+    needs: build-injector-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="sha-${GITHUB_SHA::7}"
+
+          docker buildx imagetools create -t "$INJECTOR_IMAGE:${VERSION}" \
+            "$INJECTOR_IMAGE:${VERSION}-amd64" \
+            "$INJECTOR_IMAGE:${VERSION}-arm64"
+
+          docker buildx imagetools create -t "$INJECTOR_IMAGE:${SHA}" \
+            "$INJECTOR_IMAGE:${SHA}-amd64" \
+            "$INJECTOR_IMAGE:${SHA}-arm64"
+
+          docker buildx imagetools create -t "$INJECTOR_IMAGE:latest" \
+            "$INJECTOR_IMAGE:${VERSION}-amd64" \
+            "$INJECTOR_IMAGE:${VERSION}-arm64"
 
   # ── Package and push Helm chart to OCI registry ────────────────────
   helm-publish:
     name: Helm chart (OCI)
-    needs: [build-envproxy-image, build-injector-image]
+    needs: [merge-envproxy-manifest, merge-injector-manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -236,7 +336,6 @@ jobs:
 
       - name: Download arm64 tarball
         uses: actions/download-artifact@v4
-
         with:
           name: tarball-arm64
 
@@ -248,11 +347,16 @@ jobs:
       - name: Create release
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          PRERELEASE=""
+          if [[ "$VERSION" == *"-"* ]]; then
+            PRERELEASE="--prerelease"
+          fi
           gh release create "$GITHUB_REF_NAME" \
             "envproxy-${VERSION}-linux-amd64.tar.gz" \
             "envproxy-${VERSION}-linux-arm64.tar.gz" \
             "envproxy-${VERSION}.tgz" \
             --title "EnvProxy ${VERSION}" \
-            --generate-notes
+            --generate-notes \
+            $PRERELEASE
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
