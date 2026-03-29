@@ -23,14 +23,16 @@ jobs:
   build-rust:
     name: Build Rust (${{ matrix.arch }})
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
+            runner: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -40,35 +42,23 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Build
-        run: |
-          cross build --release --features full --target ${{ matrix.target }}
+        run: cargo build --release --features full
 
       - name: Strip binaries
         run: |
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            strip target/${{ matrix.target }}/release/envproxy-agent
-            strip target/${{ matrix.target }}/release/envproxy
-            strip target/${{ matrix.target }}/release/libenvproxy.so
-          else
-            # ARM64 binaries need the cross strip
-            docker run --rm \
-              -v "$(pwd)/target/${{ matrix.target }}/release:/out" \
-              ghcr.io/cross-rs/${{ matrix.target }}:main \
-              bash -c "aarch64-linux-gnu-strip /out/envproxy-agent /out/envproxy /out/libenvproxy.so"
-          fi
+          strip target/release/envproxy-agent
+          strip target/release/envproxy
+          strip target/release/libenvproxy.so
 
       - name: Package tarball
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ARCHIVE="envproxy-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/envproxy-agent dist/
-          cp target/${{ matrix.target }}/release/envproxy dist/
-          cp target/${{ matrix.target }}/release/libenvproxy.so dist/
+          cp target/release/envproxy-agent dist/
+          cp target/release/envproxy dist/
+          cp target/release/libenvproxy.so dist/
           tar czf "$ARCHIVE" -C dist .
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
