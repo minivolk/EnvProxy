@@ -1,0 +1,10 @@
+# Release Dockerfile for envproxy-injector.
+# Uses a pre-built Go binary (built natively per-arch in CI).
+# No Go compilation in Docker — just COPY the binary into distroless.
+FROM gcr.io/distroless/static:nonroot
+
+ARG TARGETARCH
+COPY --chmod=755 binaries/${TARGETARCH}/injector /injector
+
+USER 65534:65534
+ENTRYPOINT ["/injector"]

@@ -20,8 +20,8 @@ WORKDIR /src
 COPY support/java/src/ src/
 COPY support/java/META-INF/ META-INF/
 RUN mkdir -p build && \
-    javac -d build src/envproxy/EnvProxyAgent.java src/envproxy/EnvProxyMap.java && \
-    jar cfm envproxy-agent.jar META-INF/MANIFEST.MF -C build .
+  javac -d build src/envproxy/EnvProxyAgent.java src/envproxy/EnvProxyMap.java && \
+  jar cfm envproxy-agent.jar META-INF/MANIFEST.MF -C build .
 
 # ── Rust build stage (for local builds; CI uses pre-built binaries) ──
 FROM rust:1.88-trixie AS rust-builder
@@ -29,12 +29,12 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 RUN cargo build --release --features full && \
-    strip target/release/envproxy-agent && \
-    strip target/release/envproxy && \
-    strip target/release/libenvproxy.so
+  strip target/release/envproxy-agent && \
+  strip target/release/envproxy && \
+  strip target/release/libenvproxy.so
 
 # ── Runtime (distroless, non-root — no shell, minimal attack surface) ─
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 # Rust binaries — from CI pre-built artifacts or from rust-builder stage.
 # --chmod=755 required for distroless non-root (no chmod available in image).
@@ -44,10 +44,10 @@ COPY --chmod=755 binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
 COPY --chmod=755 binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
 
 # Python hook
-COPY --chmod=644 support/python/ /usr/lib/envproxy/python/
+COPY --chmod=755 support/python/ /usr/lib/envproxy/python/
 
 # Java agent JAR
-COPY --chmod=644 --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
+COPY --chmod=755 --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
 USER 65534:65534
 
