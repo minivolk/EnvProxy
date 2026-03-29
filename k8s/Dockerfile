@@ -2,7 +2,7 @@
 # Contains: envproxy-agent, envproxy CLI, libenvproxy.so, python/ hook, java/ agent
 #
 # Used as:
-#   - DaemonSet: ENTRYPOINT ["envproxy-agent"]
+#   - Sidecar: envproxy-agent runs alongside app containers in each pod
 #   - Init container: copies /usr/lib/envproxy/* into a shared emptyDir volume
 #
 # Build modes:
@@ -28,7 +28,7 @@ FROM rust:1.88-trixie AS rust-builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-RUN cargo build --release --features kubernetes && \
+RUN cargo build --release --features full && \
     strip target/release/envproxy-agent && \
     strip target/release/envproxy && \
     strip target/release/libenvproxy.so

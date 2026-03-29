@@ -28,7 +28,7 @@ spec:
           image: "{{ .Values.injector.image.repository }}:{{ .Values.injector.image.tag }}"
           imagePullPolicy: {{ .Values.injector.image.pullPolicy | default "IfNotPresent" }}
           args:
-            - --envproxy-image={{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}
+            - --envproxy-image={{ .Values.envproxy.image.repository }}:{{ .Values.envproxy.image.tag }}
             - --default-cache-ttl={{ .Values.injector.defaultCacheTTL }}
             - --port=9443
             - --webhook-name={{ include "envproxy.injector.fullname" . }}

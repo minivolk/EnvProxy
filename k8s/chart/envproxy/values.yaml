@@ -1,38 +1,11 @@
 # envproxy Helm chart values
 
-# -- envproxy-agent DaemonSet configuration
-agent:
+# -- envproxy container image (used for init container + sidecar agent)
+envproxy:
   image:
     repository: ghcr.io/minivolk/envproxy
     tag: latest
     pullPolicy: IfNotPresent
-
-  # -- Agent configuration (rendered into config.toml ConfigMap)
-  backend:
-    # -- Backend type: "kubernetes", "file", "http"
-    type: kubernetes
-    # -- For kubernetes backend: namespace of the Secret (defaults to release namespace)
-    namespace: ""
-    # -- For kubernetes backend: Secret name to read env vars from
-    secretName: envproxy-secrets
-
-  socket:
-    # -- Host path for the Unix socket (shared with all pods on the node)
-    hostPath: /var/run/envproxy
-
-  # -- Log level: trace, debug, info, warn, error
-  logLevel: info
-
-  resources:
-    limits:
-      cpu: 100m
-      memory: 64Mi
-    requests:
-      cpu: 50m
-      memory: 32Mi
-
-  nodeSelector: {}
-  tolerations: []
 
 # -- envproxy-injector webhook configuration
 injector:
@@ -47,7 +20,6 @@ injector:
   defaultCacheTTL: "30"
 
   # -- Webhook failure policy: Ignore or Fail
-  # Use Ignore in production to avoid blocking pod creation if the webhook is down
   failurePolicy: Ignore
 
   # -- Namespace selector: only pods in namespaces with this label are eligible
@@ -67,18 +39,12 @@ injector:
 
 # -- TLS configuration for the webhook
 tls:
-  # -- Use cert-manager to generate TLS certificates
   certManager:
     enabled: false
-    # -- Issuer kind: Issuer or ClusterIssuer
     issuerKind: Issuer
-    # -- Issuer name (created by the chart if certManager.enabled)
     issuerName: envproxy-selfsigned
 
-  # -- Alternatively, provide your own TLS secret
-  # secretName: envproxy-injector-tls
-
-# -- Image pull secrets for private registries (e.g., ghcr.io)
+# -- Image pull secrets for private registries
 imagePullSecrets:
   - name: ghcr-pull-secret
 

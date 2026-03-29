@@ -92,10 +92,35 @@ fn cmd_run(cmd: &[String], socket: &Path) -> Result<()> {
 
     // Only set ENVPROXY_SOCKET if not already in the environment.
     // In Kubernetes, the webhook sets it to the correct hostPath value
-    // (e.g., /var/run/envproxy/agent.sock); don't overwrite it with the
+    // (e.g., /envproxy/agent.sock); don't overwrite it with the
     // CLI's default (/tmp/envproxy/agent.sock).
-    if std::env::var("ENVPROXY_SOCKET").is_err() {
-        command.env("ENVPROXY_SOCKET", socket.to_string_lossy().as_ref());
+    let socket_path = if let Ok(s) = std::env::var("ENVPROXY_SOCKET") {
+        s
+    } else {
+        let s = socket.to_string_lossy().into_owned();
+        command.env("ENVPROXY_SOCKET", &s);
+        s
+    };
+
+    // Wait for the agent socket to be ready before exec'ing.
+    // In the sidecar model, the agent and app containers start simultaneously.
+    // The agent needs a moment to create the Unix socket. Without this wait,
+    // the app starts before the socket exists, and the Python/Java hooks
+    // skip installation because they check for socket existence at startup.
+    if !socket_path.is_empty() {
+        let max_wait = Duration::from_secs(10);
+        let poll_interval = Duration::from_millis(100);
+        let start = std::time::Instant::now();
+
+        while !std::path::Path::new(&socket_path).exists() {
+            if start.elapsed() >= max_wait {
+                eprintln!(
+                    "[envproxy] warning: agent socket {socket_path} not found after {max_wait:?}, proceeding anyway"
+                );
+                break;
+            }
+            std::thread::sleep(poll_interval);
+        }
     }
 
     // Replace the current process with the target command.

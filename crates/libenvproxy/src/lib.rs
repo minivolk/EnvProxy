@@ -28,7 +28,9 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::OnceLock;
 
-use envproxy_proto::{encode_request, Status, DEFAULT_SOCKET_PATH};
+use envproxy_proto::{
+    encode_request, encode_request_v2, Status, DEFAULT_SOCKET_PATH, VAULT_PREFIX,
+};
 
 /// Library constructor — runs before `main()` when the `.so` is loaded via `LD_PRELOAD`.
 ///
@@ -234,12 +236,18 @@ macro_rules! debug_log {
 
 /// Query the envproxy-agent for a key via Unix socket.
 ///
+/// If `current_value` is provided (e.g., a `vault:` prefixed env var value),
+/// a v2 request is sent so the agent can parse the Vault path and resolve it.
+///
 /// Returns `Some(CString)` if the key was resolved, `None` if the agent
 /// is unavailable or the key should be passed through to real `getenv`.
-fn query_agent(key: &[u8]) -> Option<CString> {
+fn query_agent(key: &[u8], current_value: Option<&[u8]>) -> Option<CString> {
     let socket_path = get_socket_path();
 
-    let encoded = encode_request(key)?;
+    let encoded = match current_value {
+        Some(val) => encode_request_v2(key, val)?,
+        None => encode_request(key)?,
+    };
 
     let mut stream = match UnixStream::connect(socket_path) {
         Ok(s) => s,
@@ -343,8 +351,26 @@ pub unsafe extern "C" fn getenv(name: *const std::ffi::c_char) -> *mut std::ffi:
         return real_getenv()(name);
     }
 
-    // Try to resolve via the agent.
-    if let Some(resolved) = query_agent(key_bytes) {
+    // Check the real env var value. If it starts with "vault:", send a v2
+    // request with the value so the agent can resolve the Vault path.
+    // SAFETY: Calling real getenv to read the current value.
+    let real_ptr = real_getenv()(name);
+    if !real_ptr.is_null() {
+        // SAFETY: real getenv returns a valid C string.
+        let real_value = CStr::from_ptr(real_ptr).to_bytes();
+        if real_value.starts_with(VAULT_PREFIX.as_bytes()) {
+            // Value is a vault: reference — send v2 request with the value.
+            if let Some(resolved) = query_agent(key_bytes, Some(real_value)) {
+                return resolved.into_raw();
+            }
+            // Agent unavailable or error — return the raw vault: value
+            // (better than returning NULL for an env var that exists).
+            return real_ptr;
+        }
+    }
+
+    // Try to resolve via the agent (v1 request, key only).
+    if let Some(resolved) = query_agent(key_bytes, None) {
         // Leak the CString so the pointer remains valid for the caller.
         // This is the standard pattern for `LD_PRELOAD` getenv overrides:
         // the returned pointer must outlive the call, and C code expects
@@ -354,7 +380,8 @@ pub unsafe extern "C" fn getenv(name: *const std::ffi::c_char) -> *mut std::ffi:
 
     // Fallback: call the real getenv.
     // SAFETY: Delegating to real getenv with the original, valid name pointer.
-    real_getenv()(name)
+    // We already have real_ptr from above; return it directly.
+    real_ptr
 }
 
 /// Override for `secure_getenv` (glibc extension).

@@ -3,6 +3,10 @@
 //! Listens for incoming connections from `libenvproxy.so` clients,
 //! decodes requests using the wire protocol, resolves keys via the
 //! configured backend, and sends responses.
+//!
+//! Supports both v1 (key only) and v2 (key + value) protocol requests.
+//! v2 requests include the current env var value, enabling `vault:` prefix
+//! resolution where the agent parses the Vault path from the value.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -10,7 +14,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
-use envproxy_proto::{decode_request, encode_response, Status, PROTOCOL_VERSION};
+use envproxy_proto::{encode_response, Status, PROTOCOL_V1, PROTOCOL_V2, VAULT_PREFIX};
 
 use crate::backend::Backend;
 
@@ -70,7 +74,9 @@ impl Server {
 
 /// Handle a single client connection.
 ///
-/// Reads exactly one request, resolves the key, and sends the response.
+/// Reads one request (v1 or v2), resolves the key via the backend, and sends
+/// the response. For v2 requests where the value starts with `vault:`, the
+/// backend's `resolve_with_value()` method is called instead of `resolve()`.
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
     backend: &dyn Backend,
@@ -80,7 +86,7 @@ async fn handle_connection(
     stream.read_exact(&mut header).await?;
 
     let version = header[0];
-    if version != PROTOCOL_VERSION {
+    if version != PROTOCOL_V1 && version != PROTOCOL_V2 {
         tracing::warn!(version, "unsupported protocol version");
         let response = encode_response(
             Status::Error,
@@ -94,34 +100,47 @@ async fn handle_connection(
 
     let key_len = u16::from_be_bytes([header[1], header[2]]) as usize;
 
-    // Read the key
+    // Read the key.
     let mut key_buf = vec![0u8; key_len];
     if key_len > 0 {
         stream.read_exact(&mut key_buf).await?;
     }
 
-    // Reconstruct full message for decode_request
-    let mut full_msg = Vec::with_capacity(3 + key_len);
-    full_msg.extend_from_slice(&header);
-    full_msg.extend_from_slice(&key_buf);
+    // For v2, also read the value.
+    let value_buf = if version == PROTOCOL_V2 {
+        let mut val_header = [0u8; 2];
+        stream.read_exact(&mut val_header).await?;
+        let val_len = u16::from_be_bytes(val_header) as usize;
+        let mut buf = vec![0u8; val_len];
+        if val_len > 0 {
+            stream.read_exact(&mut buf).await?;
+        }
+        Some(buf)
+    } else {
+        None
+    };
 
-    let request = match decode_request(&full_msg) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to decode request");
-            let response = encode_response(Status::Error, e.to_string().as_bytes());
-            if let Some(resp) = response {
-                stream.write_all(&resp).await?;
+    let key_str = String::from_utf8_lossy(&key_buf);
+
+    // Determine which resolve method to call.
+    let resolve_result = match &value_buf {
+        Some(val) if !val.is_empty() => {
+            let val_str = String::from_utf8_lossy(val);
+            if val_str.starts_with(VAULT_PREFIX) {
+                tracing::debug!(key = %key_str, vault_ref = %val_str, "resolving vault reference");
+                backend.resolve_with_value(&key_str, &val_str).await
+            } else {
+                tracing::debug!(key = %key_str, "resolving key (v2, non-vault value)");
+                backend.resolve(&key_str).await
             }
-            return Ok(());
+        }
+        _ => {
+            tracing::debug!(key = %key_str, "resolving key (v1)");
+            backend.resolve(&key_str).await
         }
     };
 
-    let key_str = String::from_utf8_lossy(&request.key);
-    tracing::debug!(key = %key_str, "resolving key");
-
-    // Resolve via backend
-    let response = match backend.resolve(&key_str).await {
+    let response = match resolve_result {
         Ok(Some(value)) => {
             tracing::debug!(key = %key_str, value_len = value.len(), "key resolved");
             encode_response(Status::Found, value.as_bytes())

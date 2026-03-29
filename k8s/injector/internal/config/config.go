@@ -4,7 +4,7 @@ package config
 // Config holds the webhook configuration values.
 type Config struct {
 	// EnvproxyImage is the container image used for the init container
-	// that copies envproxy binaries into the shared volume.
+	// and sidecar agent.
 	EnvproxyImage string
 
 	// DefaultCacheTTL is the default cache TTL (seconds) for Python/Java
@@ -24,7 +24,6 @@ const (
 	AnnotationCacheTTL = "envproxy.dev/cache-ttl"
 
 	// AnnotationContainers limits injection to specific containers (comma-separated).
-	// If empty, all containers are injected.
 	AnnotationContainers = "envproxy.dev/containers"
 
 	// AnnotationNoPython disables Python os.environ patching when set to "true".
@@ -33,24 +32,24 @@ const (
 	// AnnotationNoJava disables Java System.getenv() patching when set to "true".
 	AnnotationNoJava = "envproxy.dev/no-java"
 
+	// Vault-specific annotations.
+	AnnotationVaultAddr       = "envproxy.dev/vault-addr"
+	AnnotationVaultRole       = "envproxy.dev/vault-role"
+	AnnotationVaultAuthMethod = "envproxy.dev/vault-auth-method"
+	AnnotationVaultAuthMount  = "envproxy.dev/vault-auth-mount"
+	AnnotationVaultCACert     = "envproxy.dev/vault-ca-cert"
+	AnnotationVaultSkipVerify = "envproxy.dev/vault-tls-skip-verify"
+	AnnotationVaultCacheTTL   = "envproxy.dev/vault-cache-ttl"
+
 	// StatusInjected is the value set on AnnotationStatus after injection.
 	StatusInjected = "injected"
 
-	// VolumeName is the name of the shared emptyDir volume for envproxy binaries.
+	// VolumeName is the name of the shared emptyDir volume.
 	VolumeName = "envproxy-bin"
 
-	// SocketVolumeName is the name of the hostPath volume for the agent socket.
-	SocketVolumeName = "envproxy-socket"
-
-	// MountPath is where envproxy binaries are mounted in the app container.
+	// MountPath is where envproxy binaries are mounted.
 	MountPath = "/envproxy"
 
-	// SocketMountPath is where the agent socket is mounted.
-	SocketMountPath = "/var/run/envproxy"
-
-	// SocketPath is the full path to the agent socket inside the container.
-	SocketPath = "/var/run/envproxy/agent.sock"
-
-	// HostSocketPath is the host path where the DaemonSet agent socket lives.
-	HostSocketPath = "/var/run/envproxy"
+	// SocketPath is the agent socket inside the shared emptyDir.
+	SocketPath = "/envproxy/agent.sock"
 )
