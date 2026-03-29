@@ -3,7 +3,7 @@
 #
 # Used as:
 #   - Sidecar: envproxy-agent runs alongside app containers in each pod
-#   - Init container: copies /usr/lib/envproxy/* into a shared emptyDir volume
+#   - Init container: runs "envproxy init --target /envproxy" to copy runtime files
 #
 # Build modes:
 #   Local:  docker build -f k8s/Dockerfile .
@@ -11,8 +11,8 @@
 #   CI:     Pre-built binaries are placed in binaries/{amd64,arm64}/ by the
 #           release workflow. The Rust build stage is skipped via cache hit.
 #
-# NOTE: Runtime is debian (not alpine) because libenvproxy.so and the CLI
-# must be glibc-linked — they get copied into glibc-based app pods.
+# Runtime is distroless/cc-debian12 (glibc included for libenvproxy.so).
+# No shell — the init container uses "envproxy init" subcommand instead of sh -c.
 
 # ── Java build stage (architecture-independent) ──────────────────────
 FROM eclipse-temurin:21-jdk AS java-builder
@@ -33,16 +33,10 @@ RUN cargo build --release --features full && \
     strip target/release/envproxy && \
     strip target/release/libenvproxy.so
 
-# ── Runtime ──────────────────────────────────────────────────────────
-FROM debian:trixie-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+# ── Runtime (distroless, non-root — no shell, minimal attack surface) ─
+FROM gcr.io/distroless/cc-debian12:nonroot
 
 # Rust binaries — from CI pre-built artifacts or from rust-builder stage.
-# In CI, the release workflow places binaries in binaries/{amd64,arm64}/
-# and buildx sets TARGETARCH automatically.
 ARG TARGETARCH
 COPY binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
 COPY binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
@@ -54,8 +48,7 @@ COPY support/python/ /usr/lib/envproxy/python/
 # Java agent JAR
 COPY --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
-RUN mkdir -p /var/run/envproxy && \
-    chmod +x /usr/bin/envproxy-agent /usr/bin/envproxy
+USER nonroot:nonroot
 
 ENTRYPOINT ["envproxy-agent"]
 CMD ["--config", "/etc/envproxy/config.toml"]

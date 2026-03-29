@@ -56,6 +56,19 @@ enum Commands {
 
     /// Check if the agent is running and responsive.
     Status,
+
+    /// Copy envproxy runtime files to a target directory and optionally write agent config.
+    /// Used by the Kubernetes init container (works on distroless images, no shell needed).
+    Init {
+        /// Target directory to copy files to.
+        #[arg(short, long, default_value = "/envproxy")]
+        target: PathBuf,
+
+        /// Agent config content to write to <target>/config.toml.
+        /// Passed as a string (the webhook generates it from pod annotations).
+        #[arg(long)]
+        write_config: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -68,6 +81,7 @@ fn main() -> Result<()> {
             cmd_status(&cli.socket);
             Ok(())
         }
+        Commands::Init { target, write_config } => cmd_init(&target, write_config.as_deref()),
     }
 }
 
@@ -152,6 +166,76 @@ fn cmd_get(key: &str, socket: &Path) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Copy envproxy runtime files to a target directory.
+///
+/// This replaces the `sh -c "cp ... && mkdir ..."` init container script,
+/// enabling the use of distroless images (no shell required).
+/// Optionally writes a config.toml file if `config_content` is provided.
+fn cmd_init(target: &Path, config_content: Option<&str>) -> Result<()> {
+    use std::fs;
+
+    // Create directory structure.
+    let dirs = ["lib", "python", "java"];
+    for dir in &dirs {
+        fs::create_dir_all(target.join(dir))
+            .with_context(|| format!("failed to create {}/{dir}", target.display()))?;
+    }
+
+    // Source → destination mappings.
+    let files: &[(&str, &str)] = &[
+        ("/usr/bin/envproxy", "envproxy"),
+        ("/usr/bin/envproxy-agent", "envproxy-agent"),
+        ("/usr/lib/envproxy/lib/libenvproxy.so", "lib/libenvproxy.so"),
+        ("/usr/lib/envproxy/java/envproxy-agent.jar", "java/envproxy-agent.jar"),
+    ];
+
+    for (src, dst) in files {
+        let dest = target.join(dst);
+        fs::copy(src, &dest)
+            .with_context(|| format!("failed to copy {src} → {}", dest.display()))?;
+    }
+
+    // Copy Python support directory (multiple files).
+    let python_src = Path::new("/usr/lib/envproxy/python");
+    if python_src.is_dir() {
+        for entry in fs::read_dir(python_src).context("failed to read python dir")? {
+            let entry = entry?;
+            let src_path = entry.path();
+            if src_path.is_file() {
+                let file_name = entry.file_name();
+                let dest = target.join("python").join(&file_name);
+                fs::copy(&src_path, &dest).with_context(|| {
+                    format!("failed to copy {} → {}", src_path.display(), dest.display())
+                })?;
+            }
+        }
+    }
+
+    // Set executable permissions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let executables = ["envproxy", "envproxy-agent"];
+        for name in &executables {
+            let path = target.join(name);
+            if path.exists() {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                    .with_context(|| format!("failed to chmod {}", path.display()))?;
+            }
+        }
+    }
+
+    // Write config.toml if provided.
+    if let Some(content) = config_content {
+        let config_path = target.join("config.toml");
+        fs::write(&config_path, content)
+            .with_context(|| format!("failed to write {}", config_path.display()))?;
+    }
+
+    println!("envproxy init: copied runtime files to {}", target.display());
     Ok(())
 }
 
