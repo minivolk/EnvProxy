@@ -279,8 +279,10 @@ func shouldInject(name string, targets map[string]bool) bool {
 // secureContext returns a hardened SecurityContext for injected containers:
 // non-root, read-only root filesystem, no privilege escalation, all capabilities dropped.
 func secureContext() *corev1.SecurityContext {
+	uid := int64(65534)
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             boolPtr(true),
+		RunAsUser:                &uid,
 		ReadOnlyRootFilesystem:   boolPtr(true),
 		AllowPrivilegeEscalation: boolPtr(false),
 		Capabilities: &corev1.Capabilities{
@@ -291,4 +293,8 @@ func secureContext() *corev1.SecurityContext {
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func int64Ptr(i int64) *int64 {
+	return &i
 }

@@ -48,7 +48,7 @@ COPY support/python/ /usr/lib/envproxy/python/
 # Java agent JAR
 COPY --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
-USER nonroot:nonroot
+USER 65534:65534
 
 ENTRYPOINT ["envproxy-agent"]
 CMD ["--config", "/etc/envproxy/config.toml"]
