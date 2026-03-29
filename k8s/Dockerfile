@@ -37,16 +37,17 @@ RUN cargo build --release --features full && \
 FROM gcr.io/distroless/cc-debian12:nonroot
 
 # Rust binaries — from CI pre-built artifacts or from rust-builder stage.
+# --chmod=755 required for distroless non-root (no chmod available in image).
 ARG TARGETARCH
-COPY binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
-COPY binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
-COPY binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
+COPY --chmod=755 binaries/${TARGETARCH}/envproxy-agent  /usr/bin/envproxy-agent
+COPY --chmod=755 binaries/${TARGETARCH}/envproxy        /usr/bin/envproxy
+COPY --chmod=755 binaries/${TARGETARCH}/libenvproxy.so  /usr/lib/envproxy/lib/libenvproxy.so
 
 # Python hook
-COPY support/python/ /usr/lib/envproxy/python/
+COPY --chmod=644 support/python/ /usr/lib/envproxy/python/
 
 # Java agent JAR
-COPY --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
+COPY --chmod=644 --from=java-builder /src/envproxy-agent.jar /usr/lib/envproxy/java/envproxy-agent.jar
 
 USER 65534:65534
 

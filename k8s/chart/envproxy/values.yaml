@@ -60,8 +60,7 @@ tls:
     issuerName: envproxy-selfsigned
 
 # -- Image pull secrets for private registries
-imagePullSecrets:
-  - name: ghcr-pull-secret
+imagePullSecrets: []
 
 # -- ServiceAccount configuration
 serviceAccount:
