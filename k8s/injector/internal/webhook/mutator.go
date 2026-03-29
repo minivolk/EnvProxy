@@ -159,7 +159,13 @@ ENVPROXY_EOF`,
 }
 
 // buildSidecar creates the envproxy-agent sidecar container.
+// Resource limits/requests use config defaults with per-pod annotation overrides.
 func (m *Mutator) buildSidecar(pod *corev1.Pod) corev1.Container {
+	cpuLimit := annotationOrDefault(pod, config.AnnotationAgentCPULimit, m.cfg.AgentCPULimit)
+	memLimit := annotationOrDefault(pod, config.AnnotationAgentMemoryLimit, m.cfg.AgentMemoryLimit)
+	cpuReq := annotationOrDefault(pod, config.AnnotationAgentCPURequest, m.cfg.AgentCPURequest)
+	memReq := annotationOrDefault(pod, config.AnnotationAgentMemoryRequest, m.cfg.AgentMemoryRequest)
+
 	return corev1.Container{
 		Name:    "envproxy-agent",
 		Image:   m.cfg.EnvproxyImage,
@@ -169,15 +175,25 @@ func (m *Mutator) buildSidecar(pod *corev1.Pod) corev1.Container {
 		},
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("50m"),
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceCPU:    resource.MustParse(cpuLimit),
+				corev1.ResourceMemory: resource.MustParse(memLimit),
 			},
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("32Mi"),
+				corev1.ResourceCPU:    resource.MustParse(cpuReq),
+				corev1.ResourceMemory: resource.MustParse(memReq),
 			},
 		},
 	}
+}
+
+// annotationOrDefault returns the pod annotation value if set, otherwise the default.
+func annotationOrDefault(pod *corev1.Pod, key, defaultVal string) string {
+	if pod.Annotations != nil {
+		if v, ok := pod.Annotations[key]; ok && v != "" {
+			return v
+		}
+	}
+	return defaultVal
 }
 
 // mutateContainer wraps a single container's entrypoint with envproxy.

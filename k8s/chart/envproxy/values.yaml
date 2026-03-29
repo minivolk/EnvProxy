@@ -7,6 +7,21 @@ envproxy:
     tag: latest
     pullPolicy: IfNotPresent
 
+  # -- Default resource limits/requests for the sidecar agent container.
+  # Can be overridden per-pod with annotations:
+  #   envproxy.dev/agent-cpu-limit: "200m"
+  #   envproxy.dev/agent-memory-limit: "256Mi"
+  #   envproxy.dev/agent-cpu-request: "50m"
+  #   envproxy.dev/agent-memory-request: "64Mi"
+  agent:
+    resources:
+      limits:
+        cpu: 50m
+        memory: 64Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
+
 # -- envproxy-injector webhook configuration
 injector:
   enabled: true

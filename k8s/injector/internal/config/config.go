@@ -10,6 +10,13 @@ type Config struct {
 	// DefaultCacheTTL is the default cache TTL (seconds) for Python/Java
 	// env var caching. Can be overridden per-pod with annotations.
 	DefaultCacheTTL string
+
+	// Default resource limits/requests for the sidecar agent container.
+	// Can be overridden per-pod with annotations.
+	AgentCPULimit      string
+	AgentMemoryLimit   string
+	AgentCPURequest    string
+	AgentMemoryRequest string
 }
 
 // Annotation keys used by the injector.
@@ -40,6 +47,12 @@ const (
 	AnnotationVaultCACert     = "envproxy.dev/vault-ca-cert"
 	AnnotationVaultSkipVerify = "envproxy.dev/vault-tls-skip-verify"
 	AnnotationVaultCacheTTL   = "envproxy.dev/vault-cache-ttl"
+
+	// Sidecar agent resource annotations (per-pod overrides).
+	AnnotationAgentCPULimit      = "envproxy.dev/agent-cpu-limit"
+	AnnotationAgentMemoryLimit   = "envproxy.dev/agent-memory-limit"
+	AnnotationAgentCPURequest    = "envproxy.dev/agent-cpu-request"
+	AnnotationAgentMemoryRequest = "envproxy.dev/agent-memory-request"
 
 	// StatusInjected is the value set on AnnotationStatus after injection.
 	StatusInjected = "injected"

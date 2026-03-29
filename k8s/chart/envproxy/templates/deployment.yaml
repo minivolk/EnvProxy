@@ -33,6 +33,10 @@ spec:
             - --port=9443
             - --webhook-name={{ include "envproxy.injector.fullname" . }}
             - --service-name={{ include "envproxy.injector.serviceName" . }}
+            - --agent-cpu-limit={{ .Values.envproxy.agent.resources.limits.cpu }}
+            - --agent-memory-limit={{ .Values.envproxy.agent.resources.limits.memory }}
+            - --agent-cpu-request={{ .Values.envproxy.agent.resources.requests.cpu }}
+            - --agent-memory-request={{ .Values.envproxy.agent.resources.requests.memory }}
             {{- if not .Values.tls.certManager.enabled }}
             - --self-signed-tls
             {{- end }}

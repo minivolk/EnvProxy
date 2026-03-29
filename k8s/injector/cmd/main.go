@@ -27,6 +27,10 @@ func main() {
 	var serviceName string
 	var namespace string
 	var certDir string
+	var agentCPULimit string
+	var agentMemoryLimit string
+	var agentCPURequest string
+	var agentMemoryRequest string
 
 	flag.StringVar(&envproxyImage, "envproxy-image", "ghcr.io/minivolk/envproxy:latest", "envproxy container image for init container")
 	flag.StringVar(&defaultCacheTTL, "default-cache-ttl", "30", "default cache TTL in seconds for Python/Java")
@@ -36,6 +40,10 @@ func main() {
 	flag.StringVar(&serviceName, "service-name", "envproxy-injector", "webhook service name for TLS cert DNS names")
 	flag.StringVar(&namespace, "namespace", "", "namespace of the webhook service (auto-detected from downward API if empty)")
 	flag.StringVar(&certDir, "cert-dir", "/tmp/k8s-webhook-server/serving-certs", "directory for TLS certs")
+	flag.StringVar(&agentCPULimit, "agent-cpu-limit", "50m", "default CPU limit for sidecar agent")
+	flag.StringVar(&agentMemoryLimit, "agent-memory-limit", "64Mi", "default memory limit for sidecar agent")
+	flag.StringVar(&agentCPURequest, "agent-cpu-request", "10m", "default CPU request for sidecar agent")
+	flag.StringVar(&agentMemoryRequest, "agent-memory-request", "32Mi", "default memory request for sidecar agent")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -104,8 +112,12 @@ func main() {
 	}
 
 	cfg := &config.Config{
-		EnvproxyImage:   envproxyImage,
-		DefaultCacheTTL: defaultCacheTTL,
+		EnvproxyImage:      envproxyImage,
+		DefaultCacheTTL:    defaultCacheTTL,
+		AgentCPULimit:      agentCPULimit,
+		AgentMemoryLimit:   agentMemoryLimit,
+		AgentCPURequest:    agentCPURequest,
+		AgentMemoryRequest: agentMemoryRequest,
 	}
 
 	mutator := webhook.NewMutator(cfg, mgr.GetClient(), log)
