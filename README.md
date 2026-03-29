@@ -2,9 +2,11 @@
 
 Transparent dynamic environment variable resolution from remote secret sources — without modifying application code.
 
-EnvProxy intercepts `getenv()` calls at the libc level via `LD_PRELOAD` and resolves them from a local agent daemon that fetches secrets from configured backends (file, HTTP API, Kubernetes Secrets, etc.). Secrets are fetched lazily, rotated dynamically, and never appear in `/proc/PID/environ`.
+EnvProxy intercepts `getenv()` calls at the libc level via `LD_PRELOAD` and resolves them from a sidecar agent that fetches secrets from configured backends (HashiCorp Vault, file, HTTP API). Secrets are fetched lazily, rotated dynamically, and never appear in `/proc/PID/environ`.
 
 ## How It Works
+
+### Local (standalone)
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -26,111 +28,243 @@ EnvProxy intercepts `getenv()` calls at the libc level via `LD_PRELOAD` and reso
 ┌──────────────────────────────────────────────────┐
 │  envproxy-agent                                  │
 │  ┌─────────┐  ┌────────────────┐                 │
-│  │ mtime   │  │ Backend Plugin │                 │
-│  │ reload  │  │ ┌────────────┐ │                 │
+│  │ Cache   │  │ Backend Plugin │                 │
+│  │ (TTL)   │  │ ┌────────────┐ │                 │
 │  │         │  │ │ JSON file  │ │                 │
 │  └─────────┘  │ ├────────────┤ │                 │
-│               │ │ K8s Secret │ │                 │
+│               │ │ Vault      │ │                 │
 │               │ └────────────┘ │                 │
 │               └────────────────┘                 │
 └──────────────────────────────────────────────────┘
 ```
 
+### Kubernetes (sidecar + Vault)
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Application Pod                                      │
+│                                                      │
+│  ┌─────────────┐  ┌──────────────────────────────┐   │
+│  │ init:        │  │ sidecar: envproxy-agent      │   │
+│  │ envproxy-init│  │                              │   │
+│  │ copies bins  │  │ - K8s auth → Vault           │   │
+│  │ + config     │  │ - Resolves vault:path#key    │   │
+│  └──────┬──────┘  │ - Cache + TTL + token renew   │   │
+│         │         │ - Unix socket /envproxy/sock   │   │
+│         ▼         └──────────────┬───────────────┘   │
+│  ┌──────────────┐               │                    │
+│  │ app container │◄──────────────┘                    │
+│  │               │  Unix socket                      │
+│  │ env:          │                                    │
+│  │  DATABASE_URL=│vault:secret/data/myapp/cfg#db_url │
+│  │               │                                    │
+│  │ LD_PRELOAD    │                                    │
+│  │ getenv() ─────┼──► agent ──► Vault ──► value      │
+│  └──────────────┘                                    │
+│                                                      │
+│  volumes: envproxy-bin (emptyDir, shared)             │
+└──────────────────────────────────────────────────────┘
+```
+
 ## Key Features
 
-- **Transparent**: Works with any dynamically-linked binary — Python, Ruby, Node.js, C, C++, Java, etc. No code changes required.
-- **Dynamic**: Secrets are fetched at call time. Rotate secrets by updating the source — running processes pick up new values automatically.
+- **Transparent**: Works with any dynamically-linked binary — Python, Ruby, Node.js, C, C++, Java. No code changes required.
+- **Dynamic**: Secrets are fetched at call time. Rotate secrets in Vault — running processes pick up new values automatically via TTL-based cache refresh.
+- **Vault-native**: Bank-vaults style `vault:path#key` syntax in env vars. Kubernetes auth with per-pod service accounts. Automatic token renewal.
 - **Lazy**: Only secrets that are actually requested are fetched. No bulk loading at startup.
-- **Secure**: Secrets never appear in `/proc/PID/environ` or `ps e` output.
-- **Python-aware**: Automatically patches `os.environ` via `sitecustomize.py` so `os.getenv()` works transparently, with configurable cache TTL.
+- **Secure**: Secrets never appear in `/proc/PID/environ` — the process environment shows `vault:path#key`, not the real secret value.
+- **Python-aware**: Automatically patches `os.environ` via `sitecustomize.py` so `os.getenv()` resolves `vault:` references transparently.
 - **Java-aware**: Automatically patches `System.getenv()` via a javaagent that replaces the internal `ProcessEnvironment` map.
-- **Kubernetes-native**: Helm chart with DaemonSet agent + mutating webhook for automatic pod injection.
-- **Fast**: Binary wire protocol over Unix socket. File backend checks mtime (one `stat` syscall) per request and only reloads on changes.
+- **Kubernetes-native**: Helm chart with mutating webhook. Injects sidecar agent + init container automatically. Pod annotations for Vault configuration.
+- **Fast**: Binary wire protocol (v2) over Unix socket. Vault responses are cached per-path with configurable TTL.
+
+## Use Cases
+
+### Database Password Rotation Without Restarts
+
+Your DBA rotates the database password every 24 hours via Vault. With static env vars, you need to restart every pod to pick up the new password — coordinating rolling restarts across dozens of services during the rotation window. With EnvProxy, the next time your connection pool calls `getenv("DATABASE_URL")` to create a new connection, it gets the new password automatically. No restart, no coordination, no downtime.
+
+### Long-Running Processes
+
+You have a data pipeline that runs for hours or days — batch jobs, ML training, stream processors. Static env vars mean the process uses whatever credentials it started with. If those credentials expire or are revoked mid-run, the process fails. With EnvProxy, the process always gets current, valid credentials on each `getenv()` call.
+
+### Hot-Reloading API Keys
+
+Your application calls a third-party API with a key stored in Vault. The vendor rotates the key — maybe you hit a rate limit and need to switch to a backup key, or the key was compromised and needs immediate replacement. With static env vars, you'd need to redeploy. With EnvProxy, update the value in Vault and every running instance picks it up within the cache TTL — seconds, not minutes.
+
+### Feature Flags via Environment
+
+Your platform uses environment variables for feature flags or configuration toggles (`FEATURE_NEW_CHECKOUT=true`). With static env vars, toggling a flag requires a redeploy. With EnvProxy backed by a file or Vault, you update the source and all running processes see the new value on the next `getenv()` call — instant rollout, instant rollback.
+
+### Secret Leak Prevention
+
+With envconsul or bank-vaults, after secrets are injected at startup, `cat /proc/1/environ` reveals every secret in plaintext. An attacker with `kubectl exec` access sees everything. With EnvProxy, `/proc/environ` only shows `vault:secret/data/myapp/config#DATABASE_URL` — the reference, never the real value. The secret only exists in the agent's memory and the application's heap, never in the kernel's process environment block.
+
+### Zero-Code Vault Migration
+
+You have 50 microservices in Python, Java, and Node.js. Each would need a Vault client library, connection setup, error handling, and caching logic — different for each language. With EnvProxy, you change one line per env var (`value: "vault:secret/data/..."`) and add one annotation (`envproxy.dev/inject: "true"`). The application code stays exactly the same — `os.getenv("DATABASE_URL")` still works, it just resolves from Vault now instead of a static string.
 
 ## Quick Start
 
-### 1. Build
+### Local Development (file backend)
 
 ```bash
+# 1. Build
 cargo build --release
-```
 
-This produces three artifacts in `target/release/`:
-
-- `libenvproxy.so` — the LD_PRELOAD shared library
-- `envproxy-agent` — the local daemon
-- `envproxy` — the CLI tool
-
-### 2. Create a secrets file
-
-```json
+# 2. Create a secrets file
+cat > secrets.json << 'EOF'
 {
   "DATABASE_URL": "postgres://user:secret@localhost:5432/mydb",
-  "API_KEY": "sk-1234567890",
-  "REDIS_URL": "redis://localhost:6379/0"
+  "API_KEY": "sk-1234567890"
 }
-```
+EOF
 
-### 3. Create an agent config
-
-```toml
-# config.toml
+# 3. Create agent config
+cat > config.toml << 'EOF'
 [agent]
 socket = "/tmp/envproxy/agent.sock"
 log_level = "info"
 
 [backend]
 type = "file"
-path = "/path/to/secrets.json"
-```
+path = "secrets.json"
+EOF
 
-### 4. Start the agent
+# 4. Start the agent
+envproxy-agent --config config.toml &
 
-```bash
-envproxy-agent --config config.toml
-```
-
-### 5. Run your application
-
-```bash
-# Using the CLI wrapper (sets LD_PRELOAD automatically):
+# 5. Run your application
 envproxy run -- python3 app.py
-
-# Or manually:
-LD_PRELOAD=/path/to/libenvproxy.so python3 app.py
 ```
 
-Your application's `getenv("DATABASE_URL")` calls will now be resolved from the agent.
-
-## Dynamic Secret Rotation
-
-envproxy supports live secret rotation without restarting any processes:
-
-1. **Agent level**: The file backend checks the file's modification time on every request. When the file changes, it's automatically reloaded. The Kubernetes backend watches for Secret changes via the K8s API.
-
-2. **Python/Java level**: The `os.environ` / `System.getenv()` proxies cache resolved values with a configurable TTL (default: 30 seconds). After expiry, the next lookup re-queries the agent.
+### Kubernetes with Vault
 
 ```bash
-# Set cache TTL to 5 seconds for faster rotation detection:
-ENVPROXY_CACHE_TTL=5 envproxy run -- python3 app.py
+# 1. Install envproxy from OCI registry
+helm install envproxy oci://ghcr.io/minivolk/charts/envproxy \
+  -n envproxy-system --create-namespace
 
-# Now edit your secrets file — the running process will pick up
-# new values within 5 seconds, no restart needed.
+# 2. Label namespace for injection
+kubectl label ns default envproxy.dev/injection=enabled
+
+# 3. Deploy a pod with vault: env vars
+kubectl apply -f - << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp
+  annotations:
+    envproxy.dev/inject: "true"
+    envproxy.dev/vault-addr: "https://vault.internal:8200"
+    envproxy.dev/vault-role: "myapp"
+spec:
+  serviceAccountName: myapp
+  containers:
+    - name: app
+      image: python:3.12-slim
+      command: ["python3", "app.py"]
+      env:
+        - name: DATABASE_URL
+          value: "vault:secret/data/myapp/config#DATABASE_URL"
+        - name: API_KEY
+          value: "vault:secret/data/myapp/config#API_KEY"
+EOF
 ```
 
-## CLI Reference
+The mutating webhook automatically injects the sidecar agent, init container, and wraps the entrypoint. Your app calls `os.getenv("DATABASE_URL")` and gets the real secret value from Vault.
+
+## Vault Integration
+
+### `vault:` Prefix Syntax
+
+Environment variable values starting with `vault:` are resolved from HashiCorp Vault at runtime:
+
+```
+vault:<mount>/data/<path>#<key>
+vault:<mount>/data/<path>#<key>#<version>
+```
+
+Examples:
+
+| Env Var Value | Vault Path | Key | Version |
+|---------------|------------|-----|---------|
+| `vault:secret/data/myapp/config#DATABASE_URL` | `secret/myapp/config` | `DATABASE_URL` | latest |
+| `vault:secret/data/myapp/db#password#3` | `secret/myapp/db` | `password` | 3 |
+| `vault:kv/data/team/prod/api#token` | `kv/team/prod/api` | `token` | latest |
+
+Non-prefixed values pass through as-is:
+
+```yaml
+env:
+  - name: DATABASE_URL
+    value: "vault:secret/data/myapp/config#DATABASE_URL"  # resolved from Vault
+  - name: LOG_LEVEL
+    value: "info"                                          # passed through unchanged
+```
+
+### Pod Annotations
+
+| Annotation | Default | Description |
+|------------|---------|-------------|
+| `envproxy.dev/inject` | *(required)* | Set to `"true"` to enable injection |
+| `envproxy.dev/vault-addr` | *(required)* | Vault server address (e.g., `https://vault.internal:8200`) |
+| `envproxy.dev/vault-role` | *(required)* | Vault auth role name |
+| `envproxy.dev/vault-auth-method` | `kubernetes` | Auth method: `kubernetes`, `token` |
+| `envproxy.dev/vault-auth-mount` | `kubernetes` | Vault auth mount path (e.g., `kubernetes_my-cluster`) |
+| `envproxy.dev/vault-cache-ttl` | `5m` | Cache TTL for resolved secrets |
+| `envproxy.dev/cache-ttl` | `30` | Python/Java proxy cache TTL (seconds) |
+| `envproxy.dev/containers` | *(all)* | Comma-separated list of containers to inject |
+| `envproxy.dev/no-python` | `false` | Disable Python `os.environ` patching |
+| `envproxy.dev/no-java` | `false` | Disable Java `System.getenv()` patching |
+
+### How It Works in Kubernetes
+
+1. **Webhook** intercepts pod creation, sees `envproxy.dev/inject: "true"`
+2. **Init container** copies envproxy binaries + generates `config.toml` from annotations into a shared emptyDir volume
+3. **Sidecar container** starts `envproxy-agent` with Vault backend, authenticates using the pod's service account, listens on Unix socket
+4. **App container** entrypoint is wrapped with `envproxy run --`, which waits for the agent socket, then `exec()`'s into the original command with `LD_PRELOAD` set
+5. **At runtime**, `getenv("DATABASE_URL")` is intercepted, the `vault:` prefixed value is sent to the agent (v2 protocol), the agent fetches from Vault, caches the result, and returns the secret
+
+### Vault Auth Setup
 
 ```bash
-# Check if the agent is running
-envproxy status
+# Enable Kubernetes auth in Vault
+vault auth enable kubernetes
+# or with a custom mount path:
+vault auth enable -path=kubernetes_my-cluster kubernetes
 
-# Resolve a single key (useful for testing)
-envproxy get DATABASE_URL
+# Configure the auth method
+vault write auth/kubernetes/config \
+  kubernetes_host="https://kubernetes.default.svc"
 
-# Run a command with envproxy interception
-envproxy run -- python3 app.py
-envproxy run -- node server.js
-envproxy run -- ./my-c-program
+# Create a policy
+vault policy write myapp-policy - << 'EOF'
+path "secret/data/myapp/*" {
+  capabilities = ["read"]
+}
+EOF
+
+# Create a role bound to a service account
+vault write auth/kubernetes/role/myapp \
+  bound_service_account_names=myapp \
+  bound_service_account_namespaces=default \
+  policies=myapp-policy \
+  ttl=1h
+```
+
+### Dynamic Secret Rotation
+
+Secrets are dynamically resolved with TTL-based caching:
+
+1. **First call**: `getenv("DATABASE_URL")` → agent fetches from Vault → caches with TTL
+2. **Subsequent calls**: served from cache (no Vault request)
+3. **After TTL expires**: next call re-fetches from Vault → picks up rotated value
+4. **Vault token**: automatically renewed at 2/3 of lease duration
+
+```yaml
+annotations:
+  envproxy.dev/vault-cache-ttl: "30s"  # re-fetch from Vault every 30 seconds
 ```
 
 ## Configuration
@@ -139,19 +273,22 @@ envproxy run -- ./my-c-program
 
 ```toml
 [agent]
-socket = "/tmp/envproxy/agent.sock"   # Unix socket path
-log_level = "info"                     # trace, debug, info, warn, error
+socket = "/tmp/envproxy/agent.sock"
+log_level = "info"
 
 # File backend — reads secrets from a JSON file
 [backend]
 type = "file"
 path = "/etc/envproxy/secrets.json"
 
-# Kubernetes backend — reads from a K8s Secret (requires --features kubernetes)
+# Vault backend — resolves vault: prefixed env vars (requires --features vault)
 # [backend]
-# type = "kubernetes"
-# namespace = "default"
-# secret_name = "app-secrets"
+# type = "vault"
+# address = "https://vault.internal:8200"
+# auth_method = "kubernetes"
+# auth_mount = "kubernetes"
+# role = "myapp"
+# cache_ttl = "5m"
 ```
 
 ### Environment Variables
@@ -170,35 +307,28 @@ path = "/etc/envproxy/secrets.json"
 
 ## Language Support
 
-| Language | Mechanism | Dynamic Rotation |
+| Language | Mechanism | `vault:` Support |
 |----------|-----------|-----------------|
-| **C / C++** | `LD_PRELOAD` overrides `getenv()` | Every call hits agent (no caching) |
-| **Python** | `sitecustomize.py` patches `os.environ` | TTL-based (default 30s) |
-| **Node.js** | `LD_PRELOAD` — Node calls `getenv()` on every `process.env` access | Every access is live |
-| **Ruby** | `LD_PRELOAD` — Ruby calls `getenv()` on every `ENV[]` access | Every access is live |
-| **Java** | javaagent patches `ProcessEnvironment` via `JAVA_TOOL_OPTIONS` (set automatically) | TTL-based (default 30s) |
+| **C / C++** | `LD_PRELOAD` overrides `getenv()` | Yes — `.so` sends v2 protocol with vault: value |
+| **Python** | `sitecustomize.py` patches `os.environ` | Yes — proxy detects vault: prefix, sends v2 |
+| **Node.js** | `LD_PRELOAD` — Node calls `getenv()` on every `process.env` access | Yes — via `.so` v2 protocol |
+| **Ruby** | `LD_PRELOAD` — Ruby calls `getenv()` on every `ENV[]` access | Yes — via `.so` v2 protocol |
+| **Java** | javaagent patches `ProcessEnvironment` map | Yes — proxy detects vault: prefix, sends v2 |
 | **Go** | Does not use libc `getenv()` — requires companion package (planned) | N/A |
 
-## Kubernetes
-
-EnvProxy includes a Helm chart for Kubernetes deployments:
-
-- **DaemonSet**: `envproxy-agent` runs on every node, exposes a Unix socket via `hostPath`
-- **Mutating Webhook**: Automatically injects an init container and wraps pod entrypoints with `envproxy run --`
-- **Kubernetes Secret backend**: Agent reads secrets from K8s Secrets with automatic reload via watch API
+## CLI Reference
 
 ```bash
-# Install
-helm install envproxy k8s/chart/envproxy -n envproxy-system --create-namespace
+# Run a command with envproxy interception
+envproxy run -- python3 app.py
+envproxy run -- node server.js
 
-# Label namespace for injection
-kubectl label ns default envproxy.dev/injection=enabled
+# Check if the agent is running
+envproxy status
 
-# Deploy a pod with envproxy injection
-kubectl apply -f k8s/examples/python-app.yaml
+# Resolve a single key (useful for testing)
+envproxy get DATABASE_URL
 ```
-
-See `k8s/chart/envproxy/values.yaml` for all configuration options.
 
 ## Project Structure
 
@@ -207,22 +337,22 @@ envproxy/
 ├── Cargo.toml                          # Workspace root
 ├── mise.toml                           # Dev tools + tasks
 ├── crates/
-│   ├── envproxy-proto/                 # Wire protocol (zero dependencies)
+│   ├── envproxy-proto/                 # Wire protocol v1/v2 + vault: ref parser
 │   ├── libenvproxy/                    # LD_PRELOAD .so (cdylib)
-│   ├── envproxy-agent/                 # Local daemon (tokio async)
+│   ├── envproxy-agent/                 # Sidecar agent (tokio async)
 │   └── envproxy-cli/                   # CLI tool
 ├── support/
 │   ├── python/                         # Python runtime hook
 │   │   ├── sitecustomize.py            # Auto-loader with chaining
-│   │   └── _envproxy_hook.py           # os.environ proxy
+│   │   └── _envproxy_hook.py           # os.environ proxy (v2 protocol)
 │   └── java/                           # Java runtime hook
-│       ├── src/envproxy/               # EnvProxyAgent + EnvProxyMap
+│       ├── src/envproxy/               # EnvProxyAgent + EnvProxyMap (v2 protocol)
 │       └── build.sh                    # Builds envproxy-agent.jar
 ├── k8s/
 │   ├── Dockerfile                      # envproxy container image
-│   ├── injector/                       # Go mutating webhook server
+│   ├── injector/                       # Go mutating webhook (sidecar injection)
 │   ├── chart/envproxy/                 # Helm chart
-│   └── examples/                       # K8s example manifests
+│   └── examples/                       # K8s manifests (vault-app, policy)
 └── examples/
     ├── config.toml                     # Shared agent config
     ├── secrets.json                    # Shared example secrets
@@ -234,22 +364,25 @@ envproxy/
 
 ## Security Model
 
-- Secrets are fetched over a **Unix socket** (local only, no network exposure).
-- Secrets are **never written to the process environment** — they exist only in the agent's memory and the application's heap.
-- `/proc/PID/environ` does **not** contain secrets.
-- The agent socket can be protected with filesystem permissions.
-- `ENVPROXY_` prefixed variables are never intercepted (prevents recursion and config leaks).
+- Secrets are fetched over a **Unix socket** (local only, no network exposure)
+- `/proc/PID/environ` shows `vault:path#key` — **never the real secret value**
+- Secrets exist only in the agent's cache and the application's heap
+- Each pod authenticates to Vault with **its own service account** (per-pod Vault roles)
+- Vault tokens are **automatically renewed** before expiry
+- `ENVPROXY_` prefixed variables are never intercepted (prevents recursion)
 
 ## Comparison with Existing Tools
 
 | Feature | envproxy | envconsul | bank-vaults | dotenv |
 |---------|----------|-----------|-------------|--------|
-| Dynamic rotation (no restart) | Yes | No (sets at start) | No (mutating webhook) | No |
+| Dynamic rotation (no restart) | Yes (TTL cache) | No (sets at start) | No (resolves at start) | No |
 | Lazy fetching | Yes | No (fetches all) | No (fetches all) | No |
-| Secrets in `/proc/environ` | No | Yes | Yes | Yes |
-| Language-agnostic | Yes | Yes | Kubernetes only | Per-language |
+| Secrets in `/proc/environ` | No (`vault:path#key`) | Yes | Yes (after resolve) | Yes |
+| Language-agnostic | Yes | Yes | Yes | Per-language |
 | No code changes | Yes | Yes | Yes | No |
+| Per-pod Vault auth | Yes (sidecar) | No | Yes (webhook) | No |
 | Works outside Kubernetes | Yes | Yes | No | Yes |
+| Versioned secret reads | Yes (`#key#3`) | No | No | No |
 
 ## Building from Source
 
@@ -258,11 +391,14 @@ envproxy/
 git clone https://github.com/minivolk/EnvProxy.git
 cd EnvProxy
 
-# Build all crates
+# Build all crates (local backends only)
 cargo build --release
 
-# Build with Kubernetes backend support
-cargo build --release --features kubernetes
+# Build with Vault support
+cargo build --release --features vault
+
+# Build with all backends (Vault + Kubernetes Secrets)
+cargo build --release --features full
 
 # Build Java agent JAR
 mise run build:java
@@ -280,7 +416,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 - Linux (`LD_PRELOAD` is Linux/Unix-specific)
 - Python 3.8+ (for the `os.environ` proxy)
 - Java 16+ (for Unix domain socket support in the Java agent)
-- Go 1.23+ (for the Kubernetes webhook injector)
+- Go 1.26+ (for the Kubernetes webhook injector)
 
 ## License
 
