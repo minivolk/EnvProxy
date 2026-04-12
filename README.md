@@ -1,5 +1,15 @@
 # EnvProxy
 
+[![CI](https://github.com/minivolk/EnvProxy/actions/workflows/ci.yml/badge.svg)](https://github.com/minivolk/EnvProxy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/minivolk/EnvProxy)](https://github.com/minivolk/EnvProxy/releases)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE-MIT)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fminivolk%2Fenvproxy-blue)](https://ghcr.io/minivolk/envproxy)
+[![Helm](https://img.shields.io/badge/helm-oci%3A%2F%2Fghcr.io%2Fminivolk%2Fcharts%2Fenvproxy-blue)](https://ghcr.io/minivolk/charts/envproxy)
+[![Vault Compatible](https://img.shields.io/badge/vault-compatible-black?logo=vault)](https://www.vaultproject.io/)
+[![Platform](https://img.shields.io/badge/platform-linux-lightgrey)](https://kernel.org/)
+
 Transparent dynamic environment variable resolution from remote secret sources — without modifying application code.
 
 EnvProxy intercepts `getenv()` calls at the libc level via `LD_PRELOAD` and resolves them from a sidecar agent that fetches secrets from configured backends (HashiCorp Vault, file, HTTP API). Secrets are fetched lazily, rotated dynamically, and never appear in `/proc/PID/environ`.

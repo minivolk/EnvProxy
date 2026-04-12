@@ -1,7 +1,6 @@
 [tools]
 rust = "latest"
 python = "3.12"
-node = "22"
 java = "21"
 
 [env]
